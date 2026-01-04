@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from typing import Sequence, Tuple
+
+import numpy as np
+
+from beam_model import BeamModel
+from point_mass import PointMass
+from torsional_spring import TorsionalSpring
+from translational_spring import TranslationalSpring
+
+
+def beam_nodes(model: BeamModel) -> np.ndarray:
+    return np.linspace(0.0, model.length, model.elements + 1)
+
+
+def _shape_factors(x: float, x1: float, x2: float) -> Tuple[float, float]:
+    xi = (x - x1) / (x2 - x1)
+    xi = np.clip(xi, 0.0, 1.0)
+    return 1.0 - xi, xi
+
+
+def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
+    n_nodes = model.elements + 1
+    dof = 2 * n_nodes
+    K = np.zeros((dof, dof))
+    M = np.zeros((dof, dof))
+
+    L_e = model.length / model.elements
+    EI = model.elastic_modulus * model.inertia
+    rhoA = model.density * model.area
+
+    k_local = (EI / L_e**3) * np.array(
+        [
+            [12, 6 * L_e, -12, 6 * L_e],
+            [6 * L_e, 4 * L_e**2, -6 * L_e, 2 * L_e**2],
+            [-12, -6 * L_e, 12, -6 * L_e],
+            [6 * L_e, 2 * L_e**2, -6 * L_e, 4 * L_e**2],
+        ]
+    )
+    m_local = (rhoA * L_e / 420) * np.array(
+        [
+            [156, 22 * L_e, 54, -13 * L_e],
+            [22 * L_e, 4 * L_e**2, 13 * L_e, -3 * L_e**2],
+            [54, 13 * L_e, 156, -22 * L_e],
+            [-13 * L_e, -3 * L_e**2, -22 * L_e, 4 * L_e**2],
+        ]
+    )
+
+    for e in range(model.elements):
+        idx = 2 * e
+        dofs = [idx, idx + 1, idx + 2, idx + 3]
+        K[np.ix_(dofs, dofs)] += k_local
+        M[np.ix_(dofs, dofs)] += m_local
+
+    x_nodes = beam_nodes(model)
+    for pm in model.point_masses:
+        e = min(np.searchsorted(x_nodes, pm.position) - 1, model.elements - 1)
+        e = max(e, 0)
+        x1, x2 = x_nodes[e], x_nodes[e + 1]
+        N1, N2 = _shape_factors(pm.position, x1, x2)
+        add = pm.mass * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
+        w_dofs = [2 * e, 2 * (e + 1)]
+        M[np.ix_(w_dofs, w_dofs)] += add
+
+    for sp in model.trans_springs:
+        e = min(np.searchsorted(x_nodes, sp.position) - 1, model.elements - 1)
+        e = max(e, 0)
+        x1, x2 = x_nodes[e], x_nodes[e + 1]
+        N1, N2 = _shape_factors(sp.position, x1, x2)
+        add = sp.k * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
+        w_dofs = [2 * e, 2 * (e + 1)]
+        K[np.ix_(w_dofs, w_dofs)] += add
+
+    return K, M
+
+
+def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
+    n_nodes = model.elements + 1
+    K = np.zeros((n_nodes, n_nodes))
+    M = np.zeros((n_nodes, n_nodes))
+
+    L_e = model.length / model.elements
+    GJ = model.shear_modulus * model.polar_inertia
+    rhoJ = model.density * model.polar_inertia
+
+    k_local = (GJ / L_e) * np.array([[1, -1], [-1, 1]])
+    m_local = (rhoJ * L_e / 6) * np.array([[2, 1], [1, 2]])
+
+    for e in range(model.elements):
+        dofs = [e, e + 1]
+        K[np.ix_(dofs, dofs)] += k_local
+        M[np.ix_(dofs, dofs)] += m_local
+
+    x_nodes = beam_nodes(model)
+    for pm in model.point_masses:
+        if pm.rotary_inertia == 0:
+            continue
+        e = min(np.searchsorted(x_nodes, pm.position) - 1, model.elements - 1)
+        e = max(e, 0)
+        x1, x2 = x_nodes[e], x_nodes[e + 1]
+        N1, N2 = _shape_factors(pm.position, x1, x2)
+        add = pm.rotary_inertia * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
+        dofs = [e, e + 1]
+        M[np.ix_(dofs, dofs)] += add
+
+    for sp in model.tors_springs:
+        e = min(np.searchsorted(x_nodes, sp.position) - 1, model.elements - 1)
+        e = max(e, 0)
+        x1, x2 = x_nodes[e], x_nodes[e + 1]
+        N1, N2 = _shape_factors(sp.position, x1, x2)
+        add = sp.k * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
+        dofs = [e, e + 1]
+        K[np.ix_(dofs, dofs)] += add
+
+    return K, M
+
+
+def apply_boundary_conditions(
+    K: np.ndarray, M: np.ndarray, fixed_dofs: Sequence[int]
+) -> Tuple[np.ndarray, np.ndarray]:
+    keep = np.array([i for i in range(K.shape[0]) if i not in fixed_dofs])
+    return K[np.ix_(keep, keep)], M[np.ix_(keep, keep)]
+
+
+def solve_frequencies(K: np.ndarray, M: np.ndarray, n_modes: int) -> np.ndarray:
+    A = np.linalg.solve(M, K)
+    eigvals, _ = np.linalg.eig(A)
+    eigvals = np.real(eigvals[eigvals > 0])
+    eigvals.sort()
+    omegas = np.sqrt(eigvals)
+    return omegas[: min(n_modes, len(omegas))] / (2 * np.pi)
+
+
+def natural_frequencies(
+    model: BeamModel,
+    bending_fixed: Sequence[int],
+    torsion_fixed: Sequence[int],
+    n_modes: int = 6,
+) -> Tuple[np.ndarray, np.ndarray]:
+    Kb, Mb = assemble_bending(model)
+    Kt, Mt = assemble_torsion(model)
+
+    Kb_r, Mb_r = apply_boundary_conditions(Kb, Mb, bending_fixed)
+    Kt_r, Mt_r = apply_boundary_conditions(Kt, Mt, torsion_fixed)
+
+    bend = solve_frequencies(Kb_r, Mb_r, n_modes)
+    tors = solve_frequencies(Kt_r, Mt_r, n_modes)
+    return bend, tors
+

@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pytest
+      - name: Run tests
+        run: pytest
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pyinstaller
+      - name: Build exe
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name auto_niemiec main.py
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto_niemiec-windows
+          path: dist/auto_niemiec.exe
+      - name: Create release with exe
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Auto Niemiec build ${{ github.run_number }}
+          draft: false
+          prerelease: true
+          files: dist/auto_niemiec.exe
+
