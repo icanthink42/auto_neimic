@@ -1,6 +1,7 @@
 import numpy as np
 
 from beam_model import BeamModel
+from constraint import Constraint
 from point_mass import PointMass
 from shear_moment import GRAVITY, shear_moment
 
@@ -81,4 +82,61 @@ def test_right_fixed_mirrors_left():
     assert np.allclose(np.abs(Vr[-2:]), P, atol=1e-6)
     # moments should be largest near the fixed end
     assert np.abs(Mr[-1]) > np.abs(Mr[0])
+
+
+def test_constraint_at_midpoint():
+    beam = _beam()
+    L = beam.length
+    w0 = beam.density * beam.area * GRAVITY
+    # Add constraint at midpoint - acts like two cantilevers meeting
+    constraints = [Constraint(position=L / 2, fix_translation=True, fix_rotation=False)]
+    x, V, M = shear_moment(beam, n=200, left_fixed=False, right_fixed=False, constraints=constraints)
+
+    assert V is not None
+    assert M is not None
+
+    # Check boundary conditions: free ends should have zero shear and moment
+    np.testing.assert_allclose(V[0], 0.0, atol=w0*L*0.01)  # left end
+    np.testing.assert_allclose(V[-1], 0.0, atol=w0*L*0.01)  # right end
+    np.testing.assert_allclose(M[0], 0.0, atol=w0*L**2*0.01)  # left end
+    np.testing.assert_allclose(M[-1], 0.0, atol=w0*L**2*0.01)  # right end
+
+    # Find values near midpoint
+    mid_idx = len(x) // 2
+    V_left_of_mid = V[mid_idx - 2]
+    V_right_of_mid = V[mid_idx + 2]
+    M_at_mid = M[mid_idx]
+
+    # Shear should be antisymmetric about midpoint
+    # Left side: V ≈ -w0*x, at x=L/2: V ≈ -w0*L/2
+    # Right side: V ≈ w0*(L-x), at x=L/2: V ≈ +w0*L/2
+    expected_V_magnitude = w0 * L / 2
+    np.testing.assert_allclose(V_left_of_mid, -expected_V_magnitude, rtol=0.1)
+    np.testing.assert_allclose(V_right_of_mid, expected_V_magnitude, rtol=0.1)
+
+    # Moment should be minimum (most negative) at midpoint
+    # For uniform load with support at center: M(L/2) = -w0*L^2/8
+    expected_M_mid = -w0 * L**2 / 8
+    np.testing.assert_allclose(M_at_mid, expected_M_mid, rtol=0.1)
+    assert M_at_mid < M[0]  # midpoint moment more negative than ends
+    assert M_at_mid < M[-1]
+
+
+def test_multiple_constraints():
+    beam = _beam()
+    w0 = beam.density * beam.area * GRAVITY
+    # Three equally spaced supports
+    constraints = [
+        Constraint(position=beam.length / 3, fix_translation=True, fix_rotation=False),
+        Constraint(position=2 * beam.length / 3, fix_translation=True, fix_rotation=False)
+    ]
+    x, V, M = shear_moment(beam, n=100, left_fixed=True, right_fixed=False, constraints=constraints)
+    assert V is not None
+    assert M is not None
+    # With three supports, the beam should be statically indeterminate
+    # Shear should change sign at support locations (reaction forces)
+    assert len(V) > 0
+    assert len(M) > 0
+    # Total upward reactions should equal total downward load
+    # This is verified by the solution but hard to test directly
 

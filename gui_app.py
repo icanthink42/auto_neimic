@@ -147,7 +147,8 @@ class BeamApp(tk.Tk):
                     model, bending_fixed=bending_fixed, torsion_fixed=torsion_fixed, n_modes=5
                 )
             x, shear, moment = shear_moment(
-                model, left_fixed=self.state.left_fixed, right_fixed=self.state.right_fixed
+                model, left_fixed=self.state.left_fixed, right_fixed=self.state.right_fixed,
+                constraints=self.state.constraints
             )
         except Exception:
             bend, tors = [], []
