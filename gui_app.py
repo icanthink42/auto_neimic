@@ -4,6 +4,7 @@ from tkinter import ttk, simpledialog
 from beam_form import BeamForm
 from boundary_form import BoundaryForm
 from beam_view import BeamView
+from constraint import Constraint
 from fem import natural_frequencies
 from frequency_panel import FrequencyPanel
 from gui_state import BeamUIState
@@ -26,6 +27,8 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Beam Params", command=self._open_beam_params).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Mass", command=self._add_mass_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Spring", command=self._add_spring_dialog).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
 
         main = ttk.Frame(self, padding=8)
@@ -156,6 +159,7 @@ class BeamApp(tk.Tk):
         self.status_var.set("Ready")
 
     def _build_bc(self, model):
+        import numpy as np
         bending_fixed = []
         torsion_fixed = []
         if self.state.left_fixed:
@@ -165,12 +169,72 @@ class BeamApp(tk.Tk):
             last_bend = 2 * (model.elements)
             bending_fixed.extend([last_bend, last_bend + 1])
             torsion_fixed.append(model.elements)
+
+        # Add constraints at arbitrary positions
+        x_nodes = np.linspace(0.0, model.length, model.elements + 1)
+        for constraint in self.state.constraints:
+            # Find nearest node
+            node_idx = np.argmin(np.abs(x_nodes - constraint.position))
+            if constraint.fix_translation:
+                # Fix vertical displacement (w DOF)
+                bending_fixed.append(2 * node_idx)
+            if constraint.fix_rotation:
+                # Fix rotation (θ DOF for bending, φ DOF for torsion)
+                bending_fixed.append(2 * node_idx + 1)
+                torsion_fixed.append(node_idx)
+
         return bending_fixed, torsion_fixed
 
     def _on_boundary_change(self, left: str, right: str):
         self.state.left_fixed = left == "fixed"
         self.state.right_fixed = right == "fixed"
         self.status_var.set("Boundary updated")
+        self._refresh_model()
+
+    def _add_constraint_dialog(self):
+        length = self.state.length
+        pos = simpledialog.askfloat("Position", f"x along beam [0, {length} m]:", parent=self, initialvalue=length / 2)
+        if pos is None:
+            return
+        pos = max(0.0, min(length, pos))
+
+        win = tk.Toplevel(self)
+        win.title("Constraint type")
+        fix_trans = tk.BooleanVar(value=True)
+        fix_rot = tk.BooleanVar(value=False)
+        ttk.Checkbutton(win, text="Fix translation (vertical)", variable=fix_trans).pack(anchor="w", padx=8, pady=4)
+        ttk.Checkbutton(win, text="Fix rotation (slope)", variable=fix_rot).pack(anchor="w", padx=8, pady=4)
+        ttk.Button(win, text="OK", command=win.destroy).pack(pady=6)
+        win.transient(self)
+        win.grab_set()
+        self.wait_window(win)
+
+        self.state.constraints.append(Constraint(position=pos, fix_translation=fix_trans.get(), fix_rotation=fix_rot.get()))
+        self.status_var.set("Constraint added")
+        self._refresh_model()
+
+    def _open_boundary_dialog(self):
+        win = tk.Toplevel(self)
+        win.title("Boundary Conditions")
+        form = BoundaryForm(win, on_change=lambda _l, _r: None)
+        form.pack(fill="both", expand=True, padx=8, pady=8)
+        form.set_values(self.state.left_fixed, self.state.right_fixed)
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", padx=8, pady=4)
+        ttk.Button(
+            btns,
+            text="OK",
+            command=lambda: self._apply_boundary_from_form(form, win),
+        ).pack(side="right", padx=4)
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
+
+    def _apply_boundary_from_form(self, form: BoundaryForm, win: tk.Toplevel):
+        left_val = form.left_var.get()
+        right_val = form.right_var.get()
+        self.state.left_fixed = left_val == "fixed"
+        self.state.right_fixed = right_val == "fixed"
+        win.destroy()
+        self.status_var.set("Boundary conditions updated")
         self._refresh_model()
 
 

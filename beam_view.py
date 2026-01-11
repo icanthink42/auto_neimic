@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 
+from constraint import Constraint
 from gui_state import BeamUIState
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
@@ -69,6 +70,27 @@ class BeamView(ttk.LabelFrame):
             )
             self.canvas.create_text(cx, y + 24, text=f"k={sp.k:g}", fill="#8e44ad", tags=tags)
 
+        for i, constraint in enumerate(self.state.constraints):
+            cx = self._to_canvas_x(constraint.position, length, x0, x1)
+            tags = ("constraint", f"constraint-{i}")
+            # Draw triangle support
+            if constraint.fix_translation:
+                pts = [cx, y + 5, cx - 10, y + 20, cx + 10, y + 20]
+                self.canvas.create_polygon(pts, fill="#f39c12", outline="#e67e22", width=2, tags=tags)
+                # Draw ground lines
+                for j in range(3):
+                    self.canvas.create_line(cx - 12 + j * 8, y + 20, cx - 16 + j * 8, y + 26, fill="#e67e22", width=2, tags=tags)
+            if constraint.fix_rotation:
+                # Draw a small clamp rectangle to indicate rotation is fixed
+                self.canvas.create_rectangle(cx - 6, y - 8, cx + 6, y + 8, fill="#d35400", outline="#e67e22", width=2, tags=tags)
+            label_parts = []
+            if constraint.fix_translation:
+                label_parts.append("T")
+            if constraint.fix_rotation:
+                label_parts.append("R")
+            label = "+".join(label_parts) if label_parts else "?"
+            self.canvas.create_text(cx, y + 32, text=label, fill="#e67e22", tags=tags)
+
     def _on_right_click(self, event):
         item = self.canvas.find_withtag("current")
         if not item:
@@ -93,6 +115,13 @@ class BeamView(ttk.LabelFrame):
                 idx = int(tag.split("-")[1])
                 if 0 <= idx < len(self.state.tors_springs):
                     self.state.tors_springs.pop(idx)
+                    self.on_change()
+                    self.update_view()
+                    return
+            if tag.startswith("constraint-"):
+                idx = int(tag.split("-")[1])
+                if 0 <= idx < len(self.state.constraints):
+                    self.state.constraints.pop(idx)
                     self.on_change()
                     self.update_view()
                     return

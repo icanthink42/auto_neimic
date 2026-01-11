@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 
 from beam_model import BeamModel
+from constraint import Constraint
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
@@ -20,6 +21,7 @@ class BeamUIState:
     point_masses: List[PointMass] = field(default_factory=list)
     trans_springs: List[TranslationalSpring] = field(default_factory=list)
     tors_springs: List[TorsionalSpring] = field(default_factory=list)
+    constraints: List[Constraint] = field(default_factory=list)
     left_fixed: bool = True
     right_fixed: bool = False
 
