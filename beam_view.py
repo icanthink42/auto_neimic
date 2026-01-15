@@ -49,19 +49,20 @@ class BeamView(ttk.LabelFrame):
         base_radius = max(self.state.radius, 1e-6)
         base_thickness = 10.0
         min_thickness = 4.0
-        samples = max(40, model.elements * 2)
-        top_points = []
-        bottom_points = []
-        for i in range(samples + 1):
-            x = length * i / samples
-            radius = model.radius_at(x)
+        element_count = max(1, model.elements)
+        element_length = length / element_count
+        radii = model.element_radii()
+        for e in range(element_count):
+            radius = radii[e] if e < len(radii) else self.state.radius
             thickness = max(min_thickness, base_thickness * (radius / base_radius))
             half = thickness / 2
-            cx = self._to_canvas_x(x, length, x0, x1)
-            top_points.append((cx, y - half))
-            bottom_points.append((cx, y + half))
-        beam_points = top_points + bottom_points[::-1]
-        self.canvas.create_polygon(beam_points, fill="#666", outline="#555", width=1, tags=("beam",))
+            x_start = element_length * e
+            x_end = element_length * (e + 1)
+            cx0 = self._to_canvas_x(x_start, length, x0, x1)
+            cx1 = self._to_canvas_x(x_end, length, x0, x1)
+            self.canvas.create_rectangle(
+                cx0, y - half, cx1, y + half, fill="#666", outline="#555", width=1, tags=("beam",)
+            )
         self.canvas.create_text(x0, y + 18, text="0 m", anchor="w", fill="#444", tags=("beam",))
         self.canvas.create_text(x1, y + 18, text=f"{length:g} m", anchor="e", fill="#444", tags=("beam",))
 
