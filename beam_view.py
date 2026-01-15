@@ -45,7 +45,23 @@ class BeamView(ttk.LabelFrame):
         x0, x1 = m, w - m
         y = h // 2
 
-        self.canvas.create_line(x0, y, x1, y, width=10, fill="#666", tags=("beam",))
+        model = self.state.to_model()
+        base_radius = max(self.state.radius, 1e-6)
+        base_thickness = 10.0
+        min_thickness = 4.0
+        samples = max(40, model.elements * 2)
+        top_points = []
+        bottom_points = []
+        for i in range(samples + 1):
+            x = length * i / samples
+            radius = model.radius_at(x)
+            thickness = max(min_thickness, base_thickness * (radius / base_radius))
+            half = thickness / 2
+            cx = self._to_canvas_x(x, length, x0, x1)
+            top_points.append((cx, y - half))
+            bottom_points.append((cx, y + half))
+        beam_points = top_points + bottom_points[::-1]
+        self.canvas.create_polygon(beam_points, fill="#666", outline="#555", width=1, tags=("beam",))
         self.canvas.create_text(x0, y + 18, text="0 m", anchor="w", fill="#444", tags=("beam",))
         self.canvas.create_text(x1, y + 18, text=f"{length:g} m", anchor="e", fill="#444", tags=("beam",))
 
@@ -125,4 +141,3 @@ class BeamView(ttk.LabelFrame):
                     self.on_change()
                     self.update_view()
                     return
-
