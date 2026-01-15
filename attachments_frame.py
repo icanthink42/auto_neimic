@@ -3,6 +3,7 @@ from tkinter import ttk
 from typing import Callable, List, Optional
 
 from point_mass import PointMass
+from si_prefix import prefix_labels, prefix_multiplier
 from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
 
@@ -67,18 +68,46 @@ class AttachmentsFrame(ttk.LabelFrame):
         ttk.Label(form, text="Mass [kg]").grid(row=1, column=0, sticky="w")
         self.mass_var = tk.StringVar(value="1.0")
         ttk.Entry(form, textvariable=self.mass_var, width=10).grid(row=1, column=1, sticky="ew", padx=4, pady=2)
+        self.mass_prefix_var = tk.StringVar(value="kg")
+        ttk.OptionMenu(
+            form,
+            self.mass_prefix_var,
+            self.mass_prefix_var.get(),
+            *prefix_labels("kg"),
+        ).grid(row=1, column=2, sticky="w", padx=4, pady=2)
 
         ttk.Label(form, text="J [kg*m^2]").grid(row=2, column=0, sticky="w")
         self.j_var = tk.StringVar(value="0.0")
         ttk.Entry(form, textvariable=self.j_var, width=10).grid(row=2, column=1, sticky="ew", padx=4, pady=2)
+        self.j_prefix_var = tk.StringVar(value="kg*m^2")
+        ttk.OptionMenu(
+            form,
+            self.j_prefix_var,
+            self.j_prefix_var.get(),
+            *prefix_labels("kg*m^2"),
+        ).grid(row=2, column=2, sticky="w", padx=4, pady=2)
 
         ttk.Label(form, text="k trans [N/m]").grid(row=3, column=0, sticky="w")
         self.kt_var = tk.StringVar(value="1e5")
         ttk.Entry(form, textvariable=self.kt_var, width=10).grid(row=3, column=1, sticky="ew", padx=4, pady=2)
+        self.kt_prefix_var = tk.StringVar(value="N/m")
+        ttk.OptionMenu(
+            form,
+            self.kt_prefix_var,
+            self.kt_prefix_var.get(),
+            *prefix_labels("N/m"),
+        ).grid(row=3, column=2, sticky="w", padx=4, pady=2)
 
         ttk.Label(form, text="k tors [N*m/rad]").grid(row=4, column=0, sticky="w")
         self.kq_var = tk.StringVar(value="1e4")
         ttk.Entry(form, textvariable=self.kq_var, width=10).grid(row=4, column=1, sticky="ew", padx=4, pady=2)
+        self.kq_prefix_var = tk.StringVar(value="N*m/rad")
+        ttk.OptionMenu(
+            form,
+            self.kq_prefix_var,
+            self.kq_prefix_var.get(),
+            *prefix_labels("N*m/rad"),
+        ).grid(row=4, column=2, sticky="w", padx=4, pady=2)
 
         btns = ttk.Frame(form)
         ttk.Button(btns, text="Add mass", command=self._add_mass).grid(row=0, column=0, padx=2)
@@ -112,8 +141,8 @@ class AttachmentsFrame(ttk.LabelFrame):
 
     def _add_mass(self):
         try:
-            mass = float(self.mass_var.get())
-            j = float(self.j_var.get())
+            mass = float(self.mass_var.get()) * prefix_multiplier(self.mass_prefix_var.get(), "kg")
+            j = float(self.j_var.get()) * prefix_multiplier(self.j_prefix_var.get(), "kg*m^2")
         except ValueError:
             return
         pos = float(self.pos_scale.get()) * self.length_getter()
@@ -131,7 +160,7 @@ class AttachmentsFrame(ttk.LabelFrame):
 
     def _add_trans(self):
         try:
-            k = float(self.kt_var.get())
+            k = float(self.kt_var.get()) * prefix_multiplier(self.kt_prefix_var.get(), "N/m")
         except ValueError:
             return
         pos = float(self.pos_scale.get()) * self.length_getter()
@@ -149,7 +178,7 @@ class AttachmentsFrame(ttk.LabelFrame):
 
     def _add_tors(self):
         try:
-            k = float(self.kq_var.get())
+            k = float(self.kq_var.get()) * prefix_multiplier(self.kq_prefix_var.get(), "N*m/rad")
         except ValueError:
             return
         pos = float(self.pos_scale.get()) * self.length_getter()
@@ -171,6 +200,8 @@ class AttachmentsFrame(ttk.LabelFrame):
             pm = self.masses.items[idx]
             self.mass_var.set(str(pm.mass))
             self.j_var.set(str(pm.rotary_inertia))
+            self.mass_prefix_var.set("kg")
+            self.j_prefix_var.set("kg*m^2")
             self.pos_scale.set(pm.position / max(self.length_getter(), 1e-9))
 
     def _select_trans(self, idx: Optional[int]):
@@ -178,6 +209,7 @@ class AttachmentsFrame(ttk.LabelFrame):
         if idx is not None:
             sp = self.trans_springs.items[idx]
             self.kt_var.set(str(sp.k))
+            self.kt_prefix_var.set("N/m")
             self.pos_scale.set(sp.position / max(self.length_getter(), 1e-9))
 
     def _select_tors(self, idx: Optional[int]):
@@ -185,6 +217,7 @@ class AttachmentsFrame(ttk.LabelFrame):
         if idx is not None:
             sp = self.tors_springs.items[idx]
             self.kq_var.set(str(sp.k))
+            self.kq_prefix_var.set("N*m/rad")
             self.pos_scale.set(sp.position / max(self.length_getter(), 1e-9))
 
     def _refresh_lists(self):
@@ -198,4 +231,3 @@ class AttachmentsFrame(ttk.LabelFrame):
             list(self.trans_springs.items),
             list(self.tors_springs.items),
         )
-
