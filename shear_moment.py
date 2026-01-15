@@ -1,5 +1,7 @@
+import threading
+from typing import Callable, List, Optional, Tuple
+
 import numpy as np
-from typing import List, Tuple
 
 from beam_model import BeamModel
 from constraint import Constraint
@@ -21,12 +23,27 @@ def _distributed_load(model: BeamModel, x: np.ndarray, g: float) -> np.ndarray:
     return model.density * areas * g
 
 
+ProgressCallback = Callable[[int], None]
+
+
+def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("Canceled")
+
+
+def _report_progress(progress: Optional[ProgressCallback], count: int = 1) -> None:
+    if progress is not None:
+        progress(count)
+
+
 def _solve_reactions(
     supports: List[float],
     point_loads: List[Tuple[float, float]],
     x: np.ndarray,
     w: np.ndarray,
     EI: np.ndarray,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> np.ndarray:
     """Solve for reaction forces at supports using statics and compatibility."""
     n_sup = len(supports)
@@ -39,6 +56,7 @@ def _solve_reactions(
     if n_sup == 1:
         # Single support: reaction equals total load
         total_load = w_total + sum(P for _, P in point_loads)
+        _report_progress(progress)
         return np.array([total_load])
 
     if n_sup == 2:
@@ -58,6 +76,7 @@ def _solve_reactions(
         # R2 * span = moment_about_x1
         R2 = moment_about_x1 / span
         R1 = total_load - R2
+        _report_progress(progress)
         return np.array([R1, R2])
 
     # For more than 2 supports: use compatibility (flexibility method)
@@ -100,17 +119,21 @@ def _solve_reactions(
             M_load -= P * np.maximum(0.0, x_span - pos)
 
     for i, xi in enumerate(supports):
+        _check_cancel(cancel_event)
         if not (x_left <= xi <= x_right):
             continue
         Ra = (x_right - xi) / span
         m_i = np.where(x_span <= xi, Ra * (x_span - x_left), Ra * (x_span - x_left) - (x_span - xi))
         d[i] = np.trapezoid(M_load * m_i / EI_span, x_span)
+        _report_progress(progress)
         for j, xj in enumerate(supports):
+            _check_cancel(cancel_event)
             if not (x_left <= xj <= x_right):
                 continue
             Rb = (x_right - xj) / span
             m_j = np.where(x_span <= xj, Rb * (x_span - x_left), Rb * (x_span - x_left) - (x_span - xj))
             F[i, j] = np.trapezoid(m_i * m_j / EI_span, x_span)
+            _report_progress(progress)
 
     # Solve F * R = -d
     try:
@@ -118,13 +141,19 @@ def _solve_reactions(
     except np.linalg.LinAlgError:
         reactions = np.linalg.lstsq(F, -d, rcond=None)[0]
 
+    _report_progress(progress)
     return reactions
 
 
 def shear_moment(
     model: BeamModel, g: float = GRAVITY, n: int = 200, left_fixed: bool = True, right_fixed: bool = False,
-    constraints: List[Constraint] = None
+    constraints: List[Constraint] = None,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
 ):
+    def _step(count: int = 1) -> None:
+        _report_progress(progress, count)
+
     x = np.linspace(0.0, model.length, n)
     w = _distributed_load(model, x, g)
     radii = np.array([model.radius_at(xi) for xi in x])
@@ -144,6 +173,7 @@ def shear_moment(
                     supports.append(c.position)
 
     if len(supports) == 0:
+        _step()
         return x, None, None
 
     supports.sort()
@@ -163,6 +193,7 @@ def shear_moment(
             w_cum = _cumulative_trapz(x, w)
             w_moment_cum = _cumulative_trapz(x, w * x)
             for i, xi in enumerate(x):
+                _check_cancel(cancel_event)
                 load_sum = w_cum[-1] - w_cum[i]
                 for pos, load in point_loads:
                     if pos > xi:
@@ -174,6 +205,7 @@ def shear_moment(
                     if pos > xi:
                         m += load * (pos - xi)
                 moment[i] = -m
+                _step()
             return x, shear, moment
         elif abs(support_pos - L) < 1e-9:
             # Right cantilever (fixed at x=L)
@@ -182,6 +214,7 @@ def shear_moment(
             w_cum = _cumulative_trapz(x, w)
             w_moment_cum = _cumulative_trapz(x, w * x)
             for i, xi in enumerate(x):
+                _check_cancel(cancel_event)
                 # Loads to the left of xi (same as left cantilever but from left end)
                 load_sum = w_cum[i]
                 for pos, load in point_loads:
@@ -194,13 +227,22 @@ def shear_moment(
                     if pos < xi:
                         m += load * (xi - pos)
                 moment[i] = -m  # Negative moment
+                _step()
             return x, shear, moment
         else:
             # Support at arbitrary position - use general method
             pass  # Fall through to multiple support case
 
     # Multiple supports: solve for reactions
-    reactions = _solve_reactions(supports, point_loads, x, w, EI)
+    reactions = _solve_reactions(
+        supports,
+        point_loads,
+        x,
+        w,
+        EI,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
 
     # Calculate shear and moment using equilibrium
     shear = np.zeros_like(x)
@@ -209,6 +251,7 @@ def shear_moment(
     w_cum = _cumulative_trapz(x, w)
     w_moment_cum = _cumulative_trapz(x, w * x)
     for i, xi in enumerate(x):
+        _check_cancel(cancel_event)
         # Start with reactions to the left
         shear_val = 0.0
         moment_val = 0.0
@@ -230,5 +273,6 @@ def shear_moment(
 
         shear[i] = shear_val
         moment[i] = moment_val
+        _step()
 
     return x, shear, moment

@@ -28,6 +28,7 @@ class BeamApp(tk.Tk):
         self._active_run_token = None
         self._cancel_requested = False
         self._is_running = False
+        self._cancel_event = threading.Event()
         self._progress_var = tk.DoubleVar(value=0.0)
         self._progress_text = tk.StringVar(value="0%")
 
@@ -80,6 +81,50 @@ class BeamApp(tk.Tk):
         self.freq_panel.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
 
         self.status_var.set("Ready (press Run)")
+
+    def _collect_support_positions(self, model, left_fixed, right_fixed, constraints):
+        supports = []
+        if left_fixed:
+            supports.append(0.0)
+        if right_fixed:
+            supports.append(model.length)
+        for constraint in constraints:
+            if constraint.fix_translation and not any(abs(s - constraint.position) < 1e-9 for s in supports):
+                supports.append(constraint.position)
+        supports.sort()
+        return supports
+
+    def _estimate_progress_steps(self, model, supports, include_frequencies, shear_points):
+        steps = 0
+        if include_frequencies:
+            steps += model.elements * 2
+            steps += len(model.point_masses) * 2
+            steps += len(model.trans_springs)
+            steps += len(model.tors_springs)
+            steps += 2
+        if not supports:
+            steps += 1
+        else:
+            steps += shear_points
+            if len(supports) == 2:
+                steps += 1
+            elif len(supports) > 2:
+                steps += len(supports) + len(supports) * len(supports) + 1
+        return max(1, steps)
+
+    def _build_progress_tracker(self, total_steps, token):
+        class _ProgressTracker:
+            def __init__(self, total, update):
+                self.total = max(1, total)
+                self.completed = 0
+                self.update = update
+
+            def step(self, count=1):
+                self.completed += count
+                percent = min(100.0, (self.completed / self.total) * 100.0)
+                self.update(percent)
+
+        return _ProgressTracker(total_steps, lambda percent: self._queue_progress(token, percent))
 
     def _add_mass_dialog(self):
         length = self.state.length
@@ -220,6 +265,7 @@ class BeamApp(tk.Tk):
             return
         self._is_running = True
         self._cancel_requested = False
+        self._cancel_event = threading.Event()
         self._run_token += 1
         token = self._run_token
         self._active_run_token = token
@@ -241,6 +287,7 @@ class BeamApp(tk.Tk):
         if not self._is_running:
             return
         self._cancel_requested = True
+        self._cancel_event.set()
         self.status_var.set("Canceling...")
 
     def _run_model_thread(self, token, snapshot):
@@ -248,7 +295,6 @@ class BeamApp(tk.Tk):
         x, shear, moment = [], None, None
         error = None
         try:
-            self._queue_progress(token, 5)
             model = snapshot["model"]
             bending_fixed, torsion_fixed = self._build_bc(
                 model,
@@ -256,21 +302,34 @@ class BeamApp(tk.Tk):
                 snapshot["right_fixed"],
                 snapshot["constraints"],
             )
-            self._queue_progress(token, 20)
-            if bending_fixed or torsion_fixed:
+            supports = self._collect_support_positions(
+                model,
+                snapshot["left_fixed"],
+                snapshot["right_fixed"],
+                snapshot["constraints"],
+            )
+            include_frequencies = bool(bending_fixed or torsion_fixed)
+            total_steps = self._estimate_progress_steps(model, supports, include_frequencies, 200)
+            tracker = self._build_progress_tracker(total_steps, token)
+            progress_step = tracker.step
+            if include_frequencies:
                 bend, tors = natural_frequencies(
-                    model, bending_fixed=bending_fixed, torsion_fixed=torsion_fixed, n_modes=5
+                    model,
+                    bending_fixed=bending_fixed,
+                    torsion_fixed=torsion_fixed,
+                    n_modes=5,
+                    progress=progress_step,
+                    cancel_event=self._cancel_event,
                 )
-                self._queue_progress(token, 60)
-            else:
-                self._queue_progress(token, 60)
             x, shear, moment = shear_moment(
                 model,
                 left_fixed=snapshot["left_fixed"],
                 right_fixed=snapshot["right_fixed"],
                 constraints=snapshot["constraints"],
+                n=200,
+                progress=progress_step,
+                cancel_event=self._cancel_event,
             )
-            self._queue_progress(token, 100)
         except Exception as exc:
             error = str(exc)
         self.after(0, lambda: self._on_run_complete(token, bend, tors, x, shear, moment, error))
@@ -283,7 +342,7 @@ class BeamApp(tk.Tk):
         self.progress_label.pack_forget()
         self.run_button.config(text="Run")
         self._set_progress(0)
-        if self._cancel_requested:
+        if self._cancel_requested or error == "Canceled":
             self.status_var.set("Canceled")
             self._cancel_requested = False
             return

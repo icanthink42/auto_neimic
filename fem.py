@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
+
+import threading
 
 import numpy as np
 
@@ -20,7 +22,24 @@ def _shape_factors(x: float, x1: float, x2: float) -> Tuple[float, float]:
     return 1.0 - xi, xi
 
 
-def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
+ProgressCallback = Callable[[int], None]
+
+
+def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError("Canceled")
+
+
+def _report_progress(progress: Optional[ProgressCallback], count: int = 1) -> None:
+    if progress is not None:
+        progress(count)
+
+
+def assemble_bending(
+    model: BeamModel,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     n_nodes = model.elements + 1
     dof = 2 * n_nodes
     K = np.zeros((dof, dof))
@@ -46,6 +65,7 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
 
     radii = model.element_radii()
     for e in range(model.elements):
+        _check_cancel(cancel_event)
         radius = radii[e] if e < len(radii) else model.radius
         EI = model.elastic_modulus * model.inertia_for_radius(radius)
         rhoA = model.density * model.area_for_radius(radius)
@@ -55,9 +75,11 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         dofs = [idx, idx + 1, idx + 2, idx + 3]
         K[np.ix_(dofs, dofs)] += k_local
         M[np.ix_(dofs, dofs)] += m_local
+        _report_progress(progress)
 
     x_nodes = beam_nodes(model)
     for pm in model.point_masses:
+        _check_cancel(cancel_event)
         e = min(np.searchsorted(x_nodes, pm.position) - 1, model.elements - 1)
         e = max(e, 0)
         x1, x2 = x_nodes[e], x_nodes[e + 1]
@@ -65,8 +87,10 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         add = pm.mass * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
         w_dofs = [2 * e, 2 * (e + 1)]
         M[np.ix_(w_dofs, w_dofs)] += add
+        _report_progress(progress)
 
     for sp in model.trans_springs:
+        _check_cancel(cancel_event)
         e = min(np.searchsorted(x_nodes, sp.position) - 1, model.elements - 1)
         e = max(e, 0)
         x1, x2 = x_nodes[e], x_nodes[e + 1]
@@ -74,11 +98,16 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         add = sp.k * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
         w_dofs = [2 * e, 2 * (e + 1)]
         K[np.ix_(w_dofs, w_dofs)] += add
+        _report_progress(progress)
 
     return K, M
 
 
-def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
+def assemble_torsion(
+    model: BeamModel,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     n_nodes = model.elements + 1
     K = np.zeros((n_nodes, n_nodes))
     M = np.zeros((n_nodes, n_nodes))
@@ -89,6 +118,7 @@ def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
 
     radii = model.element_radii()
     for e in range(model.elements):
+        _check_cancel(cancel_event)
         radius = radii[e] if e < len(radii) else model.radius
         GJ = model.shear_modulus * model.polar_inertia_for_radius(radius)
         rhoJ = model.density * model.polar_inertia_for_radius(radius)
@@ -97,10 +127,13 @@ def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         dofs = [e, e + 1]
         K[np.ix_(dofs, dofs)] += k_local
         M[np.ix_(dofs, dofs)] += m_local
+        _report_progress(progress)
 
     x_nodes = beam_nodes(model)
     for pm in model.point_masses:
+        _check_cancel(cancel_event)
         if pm.rotary_inertia == 0:
+            _report_progress(progress)
             continue
         e = min(np.searchsorted(x_nodes, pm.position) - 1, model.elements - 1)
         e = max(e, 0)
@@ -109,8 +142,10 @@ def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         add = pm.rotary_inertia * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
         dofs = [e, e + 1]
         M[np.ix_(dofs, dofs)] += add
+        _report_progress(progress)
 
     for sp in model.tors_springs:
+        _check_cancel(cancel_event)
         e = min(np.searchsorted(x_nodes, sp.position) - 1, model.elements - 1)
         e = max(e, 0)
         x1, x2 = x_nodes[e], x_nodes[e + 1]
@@ -118,6 +153,7 @@ def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         add = sp.k * np.array([[N1**2, N1 * N2], [N1 * N2, N2**2]])
         dofs = [e, e + 1]
         K[np.ix_(dofs, dofs)] += add
+        _report_progress(progress)
 
     return K, M
 
@@ -143,13 +179,17 @@ def natural_frequencies(
     bending_fixed: Sequence[int],
     torsion_fixed: Sequence[int],
     n_modes: int = 6,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    Kb, Mb = assemble_bending(model)
-    Kt, Mt = assemble_torsion(model)
+    Kb, Mb = assemble_bending(model, progress=progress, cancel_event=cancel_event)
+    Kt, Mt = assemble_torsion(model, progress=progress, cancel_event=cancel_event)
 
     Kb_r, Mb_r = apply_boundary_conditions(Kb, Mb, bending_fixed)
     Kt_r, Mt_r = apply_boundary_conditions(Kt, Mt, torsion_fixed)
 
     bend = solve_frequencies(Kb_r, Mb_r, n_modes)
+    _report_progress(progress)
     tors = solve_frequencies(Kt_r, Mt_r, n_modes)
+    _report_progress(progress)
     return bend, tors
