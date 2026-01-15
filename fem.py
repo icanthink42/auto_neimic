@@ -27,10 +27,7 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
     M = np.zeros((dof, dof))
 
     L_e = model.length / model.elements
-    EI = model.elastic_modulus * model.inertia
-    rhoA = model.density * model.area
-
-    k_local = (EI / L_e**3) * np.array(
+    k_template = np.array(
         [
             [12, 6 * L_e, -12, 6 * L_e],
             [6 * L_e, 4 * L_e**2, -6 * L_e, 2 * L_e**2],
@@ -38,7 +35,7 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
             [6 * L_e, 2 * L_e**2, -6 * L_e, 4 * L_e**2],
         ]
     )
-    m_local = (rhoA * L_e / 420) * np.array(
+    m_template = np.array(
         [
             [156, 22 * L_e, 54, -13 * L_e],
             [22 * L_e, 4 * L_e**2, 13 * L_e, -3 * L_e**2],
@@ -47,7 +44,13 @@ def assemble_bending(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
         ]
     )
 
+    radii = model.element_radii()
     for e in range(model.elements):
+        radius = radii[e] if e < len(radii) else model.radius
+        EI = model.elastic_modulus * model.inertia_for_radius(radius)
+        rhoA = model.density * model.area_for_radius(radius)
+        k_local = (EI / L_e**3) * k_template
+        m_local = (rhoA * L_e / 420) * m_template
         idx = 2 * e
         dofs = [idx, idx + 1, idx + 2, idx + 3]
         K[np.ix_(dofs, dofs)] += k_local
@@ -81,13 +84,16 @@ def assemble_torsion(model: BeamModel) -> Tuple[np.ndarray, np.ndarray]:
     M = np.zeros((n_nodes, n_nodes))
 
     L_e = model.length / model.elements
-    GJ = model.shear_modulus * model.polar_inertia
-    rhoJ = model.density * model.polar_inertia
+    k_template = np.array([[1, -1], [-1, 1]])
+    m_template = np.array([[2, 1], [1, 2]])
 
-    k_local = (GJ / L_e) * np.array([[1, -1], [-1, 1]])
-    m_local = (rhoJ * L_e / 6) * np.array([[2, 1], [1, 2]])
-
+    radii = model.element_radii()
     for e in range(model.elements):
+        radius = radii[e] if e < len(radii) else model.radius
+        GJ = model.shear_modulus * model.polar_inertia_for_radius(radius)
+        rhoJ = model.density * model.polar_inertia_for_radius(radius)
+        k_local = (GJ / L_e) * k_template
+        m_local = (rhoJ * L_e / 6) * m_template
         dofs = [e, e + 1]
         K[np.ix_(dofs, dofs)] += k_local
         M[np.ix_(dofs, dofs)] += m_local
@@ -147,4 +153,3 @@ def natural_frequencies(
     bend = solve_frequencies(Kb_r, Mb_r, n_modes)
     tors = solve_frequencies(Kt_r, Mt_r, n_modes)
     return bend, tors
-

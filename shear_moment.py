@@ -7,17 +7,38 @@ from constraint import Constraint
 GRAVITY = 9.81
 
 
-def _solve_reactions(supports: List[float], point_loads: List[Tuple[float, float]],
-                     w0: float, L: float, EI: float) -> np.ndarray:
+def _cumulative_trapz(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    if len(x) < 2:
+        return np.zeros_like(x)
+    dx = np.diff(x)
+    avg = 0.5 * (y[1:] + y[:-1])
+    return np.concatenate(([0.0], np.cumsum(avg * dx)))
+
+
+def _distributed_load(model: BeamModel, x: np.ndarray, g: float) -> np.ndarray:
+    radii = np.array([model.radius_at(xi) for xi in x])
+    areas = np.array([model.area_for_radius(r) for r in radii])
+    return model.density * areas * g
+
+
+def _solve_reactions(
+    supports: List[float],
+    point_loads: List[Tuple[float, float]],
+    x: np.ndarray,
+    w: np.ndarray,
+    EI: np.ndarray,
+) -> np.ndarray:
     """Solve for reaction forces at supports using statics and compatibility."""
     n_sup = len(supports)
     if n_sup == 0:
         return np.array([])
 
+    w_total = np.trapezoid(w, x)
+
     # For one or two supports, use statics (equilibrium equations)
     if n_sup == 1:
         # Single support: reaction equals total load
-        total_load = w0 * L + sum(P for _, P in point_loads)
+        total_load = w_total + sum(P for _, P in point_loads)
         return np.array([total_load])
 
     if n_sup == 2:
@@ -26,8 +47,8 @@ def _solve_reactions(supports: List[float], point_loads: List[Tuple[float, float
         span = x2 - x1
 
         # Total load and moment about first support
-        total_load = w0 * L
-        moment_about_x1 = w0 * L * (L / 2 - x1)  # distributed load
+        total_load = w_total
+        moment_about_x1 = np.trapezoid(w * (x - x1), x)
 
         for pos, P in point_loads:
             total_load += P
@@ -40,7 +61,7 @@ def _solve_reactions(supports: List[float], point_loads: List[Tuple[float, float
         return np.array([R1, R2])
 
     # For more than 2 supports: use compatibility (flexibility method)
-    # Build flexibility matrix using simply-supported beam influence coefficients
+    # Build flexibility matrix using numerical integration with variable EI.
     F = np.zeros((n_sup, n_sup))
     d = np.zeros(n_sup)
 
@@ -48,41 +69,48 @@ def _solve_reactions(supports: List[float], point_loads: List[Tuple[float, float
     x_left = supports[0]
     x_right = supports[-1]
     span = x_right - x_left
+    if span <= 0:
+        return np.zeros(n_sup)
+
+    span_mask = (x >= x_left) & (x <= x_right)
+    x_span = x[span_mask]
+    w_span = w[span_mask]
+    EI_span = EI[span_mask]
+
+    if x_span.size < 2:
+        return np.zeros(n_sup)
+
+    w_total_span = np.trapezoid(w_span, x_span)
+    moment_about_left = np.trapezoid(w_span * (x_span - x_left), x_span)
+    for pos, P in point_loads:
+        if x_left <= pos <= x_right:
+            w_total_span += P
+            moment_about_left += P * (pos - x_left)
+
+    R2 = moment_about_left / span
+    R1 = w_total_span - R2
+
+    w_cum = _cumulative_trapz(x_span, w_span)
+    w_moment_cum = _cumulative_trapz(x_span, w_span * x_span)
+
+    M_load = R1 * (x_span - x_left)
+    M_load -= x_span * w_cum - w_moment_cum
+    for pos, P in point_loads:
+        if x_left <= pos <= x_right:
+            M_load -= P * np.maximum(0.0, x_span - pos)
 
     for i, xi in enumerate(supports):
-        # Deflection at xi on a simply supported beam (x_left to x_right) due to loads
-        # Position relative to left support
-        rel_x = xi - x_left
-        a = rel_x / span  # normalized position
-
-        # Deflection due to uniform load on simply supported beam
-        if x_left <= xi <= x_right:
-            # Uniform load over full span
-            w_rel = w0  # load per unit length
-            d[i] = -(w_rel * span**4 / (24 * EI)) * a * (1 - a) * (1 + a - 2 * a**2)
-
-        # Deflection due to point loads
-        for pos, P in point_loads:
-            if x_left <= pos <= x_right:
-                b = (pos - x_left) / span
-                # Influence coefficient for point load
-                if rel_x <= (pos - x_left):
-                    delta = (P * span**3 / (6 * EI)) * a * (1 - b) * (2 * b - a - a * b)
-                else:
-                    delta = (P * span**3 / (6 * EI)) * b * (1 - a) * (2 * a - b - a * b)
-                d[i] += delta
-
-        # Flexibility coefficients
+        if not (x_left <= xi <= x_right):
+            continue
+        Ra = (x_right - xi) / span
+        m_i = np.where(x_span <= xi, Ra * (x_span - x_left), Ra * (x_span - x_left) - (x_span - xi))
+        d[i] = np.trapezoid(M_load * m_i / EI_span, x_span)
         for j, xj in enumerate(supports):
-            rel_xj = xj - x_left
-            b = rel_xj / span
-
-            if x_left <= xj <= x_right:
-                # Influence coefficient for unit load at xj
-                if rel_x <= rel_xj:
-                    F[i, j] = (span**3 / (6 * EI)) * a * (1 - b) * (2 * b - a - a * b)
-                else:
-                    F[i, j] = (span**3 / (6 * EI)) * b * (1 - a) * (2 * a - b - a * b)
+            if not (x_left <= xj <= x_right):
+                continue
+            Rb = (x_right - xj) / span
+            m_j = np.where(x_span <= xj, Rb * (x_span - x_left), Rb * (x_span - x_left) - (x_span - xj))
+            F[i, j] = np.trapezoid(m_i * m_j / EI_span, x_span)
 
     # Solve F * R = -d
     try:
@@ -98,6 +126,9 @@ def shear_moment(
     constraints: List[Constraint] = None
 ):
     x = np.linspace(0.0, model.length, n)
+    w = _distributed_load(model, x, g)
+    radii = np.array([model.radius_at(xi) for xi in x])
+    EI = model.elastic_modulus * np.array([model.inertia_for_radius(r) for r in radii])
 
     # Collect all support positions that fix translation
     supports = []
@@ -116,12 +147,10 @@ def shear_moment(
         return x, None, None
 
     supports.sort()
-    w0 = model.density * model.area * g  # distributed load [N/m], downward
     point_loads = [(pm.position, pm.mass * g) for pm in model.point_masses]
     point_loads.sort(key=lambda p: p[0])
 
     L = model.length
-    EI = model.elastic_modulus * model.inertia
 
     # Simple cases first
     if len(supports) == 1:
@@ -131,14 +160,16 @@ def shear_moment(
             # Left cantilever (fixed at x=0)
             shear = np.zeros_like(x)
             moment = np.zeros_like(x)
+            w_cum = _cumulative_trapz(x, w)
+            w_moment_cum = _cumulative_trapz(x, w * x)
             for i, xi in enumerate(x):
-                load_sum = w0 * (L - xi)
+                load_sum = w_cum[-1] - w_cum[i]
                 for pos, load in point_loads:
                     if pos > xi:
                         load_sum += load
                 shear[i] = -load_sum
 
-                m = 0.5 * w0 * (L - xi) ** 2
+                m = (w_moment_cum[-1] - w_moment_cum[i]) - xi * (w_cum[-1] - w_cum[i])
                 for pos, load in point_loads:
                     if pos > xi:
                         m += load * (pos - xi)
@@ -148,15 +179,17 @@ def shear_moment(
             # Right cantilever (fixed at x=L)
             shear = np.zeros_like(x)
             moment = np.zeros_like(x)
+            w_cum = _cumulative_trapz(x, w)
+            w_moment_cum = _cumulative_trapz(x, w * x)
             for i, xi in enumerate(x):
                 # Loads to the left of xi (same as left cantilever but from left end)
-                load_sum = w0 * xi
+                load_sum = w_cum[i]
                 for pos, load in point_loads:
                     if pos < xi:  # Changed from <= to < to match left cantilever logic
                         load_sum += load
                 shear[i] = -load_sum  # Negative because loads pull down
 
-                m = 0.5 * w0 * xi ** 2
+                m = xi * w_cum[i] - w_moment_cum[i]
                 for pos, load in point_loads:
                     if pos < xi:
                         m += load * (xi - pos)
@@ -167,12 +200,14 @@ def shear_moment(
             pass  # Fall through to multiple support case
 
     # Multiple supports: solve for reactions
-    reactions = _solve_reactions(supports, point_loads, w0, L, EI)
+    reactions = _solve_reactions(supports, point_loads, x, w, EI)
 
     # Calculate shear and moment using equilibrium
     shear = np.zeros_like(x)
     moment = np.zeros_like(x)
 
+    w_cum = _cumulative_trapz(x, w)
+    w_moment_cum = _cumulative_trapz(x, w * x)
     for i, xi in enumerate(x):
         # Start with reactions to the left
         shear_val = 0.0
@@ -184,8 +219,8 @@ def shear_moment(
                 moment_val += reactions[j] * (xi - sup_pos)
 
         # Subtract distributed load
-        shear_val -= w0 * xi
-        moment_val -= 0.5 * w0 * xi**2
+        shear_val -= w_cum[i]
+        moment_val -= xi * w_cum[i] - w_moment_cum[i]
 
         # Subtract point loads
         for pos, load in point_loads:
@@ -197,4 +232,3 @@ def shear_moment(
         moment[i] = moment_val
 
     return x, shear, moment
-
