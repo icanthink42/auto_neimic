@@ -33,7 +33,7 @@ def _solve_reactions(
     if n_sup == 0:
         return np.array([])
 
-    w_total = np.trapz(w, x)
+    w_total = np.trapezoid(w, x)
 
     # For one or two supports, use statics (equilibrium equations)
     if n_sup == 1:
@@ -48,7 +48,7 @@ def _solve_reactions(
 
         # Total load and moment about first support
         total_load = w_total
-        moment_about_x1 = np.trapz(w * (x - x1), x)
+        moment_about_x1 = np.trapezoid(w * (x - x1), x)
 
         for pos, P in point_loads:
             total_load += P
@@ -80,8 +80,8 @@ def _solve_reactions(
     if x_span.size < 2:
         return np.zeros(n_sup)
 
-    w_total_span = np.trapz(w_span, x_span)
-    moment_about_left = np.trapz(w_span * (x_span - x_left), x_span)
+    w_total_span = np.trapezoid(w_span, x_span)
+    moment_about_left = np.trapezoid(w_span * (x_span - x_left), x_span)
     for pos, P in point_loads:
         if x_left <= pos <= x_right:
             w_total_span += P
@@ -104,13 +104,13 @@ def _solve_reactions(
             continue
         Ra = (x_right - xi) / span
         m_i = np.where(x_span <= xi, Ra * (x_span - x_left), Ra * (x_span - x_left) - (x_span - xi))
-        d[i] = np.trapz(M_load * m_i / EI_span, x_span)
+        d[i] = np.trapezoid(M_load * m_i / EI_span, x_span)
         for j, xj in enumerate(supports):
             if not (x_left <= xj <= x_right):
                 continue
             Rb = (x_right - xj) / span
             m_j = np.where(x_span <= xj, Rb * (x_span - x_left), Rb * (x_span - x_left) - (x_span - xj))
-            F[i, j] = np.trapz(m_i * m_j / EI_span, x_span)
+            F[i, j] = np.trapezoid(m_i * m_j / EI_span, x_span)
 
     # Solve F * R = -d
     try:

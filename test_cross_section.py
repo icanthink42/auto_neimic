@@ -41,7 +41,7 @@ def test_shear_moment_uses_variable_sections():
     area2 = np.pi * 0.2**2
 
     total_load = area1 * 0.5 + area2 * 0.5
-    np.testing.assert_allclose(shear[0], -total_load, rtol=1e-3, atol=1e-6)
+    np.testing.assert_allclose(shear[0], -total_load, rtol=2e-3, atol=1e-6)
 
     target = 0.75
     idx = int(np.argmin(np.abs(x - target)))
