@@ -116,12 +116,12 @@ def shear_moment(
         return x, None, None
 
     supports.sort()
-    w0 = model.density * model.area * g  # distributed load [N/m], downward
+    w0 = model.density * model.average_area() * g  # distributed load [N/m], downward
     point_loads = [(pm.position, pm.mass * g) for pm in model.point_masses]
     point_loads.sort(key=lambda p: p[0])
 
     L = model.length
-    EI = model.elastic_modulus * model.inertia
+    EI = model.elastic_modulus * model.average_inertia()
 
     # Simple cases first
     if len(supports) == 1:
@@ -197,4 +197,3 @@ def shear_moment(
         moment[i] = moment_val
 
     return x, shear, moment
-
