@@ -1,3 +1,4 @@
+import threading
 import tkinter as tk
 from tkinter import ttk, simpledialog
 
@@ -23,6 +24,13 @@ class BeamApp(tk.Tk):
         self.title("Auto Niemiec Beam")
         self.state = BeamUIState()
         self.status_var = tk.StringVar(value="Ready")
+        self._run_token = 0
+        self._active_run_token = None
+        self._cancel_requested = False
+        self._is_running = False
+        self._cancel_event = threading.Event()
+        self._progress_var = tk.DoubleVar(value=0.0)
+        self._progress_text = tk.StringVar(value="0%")
 
         toolbar = ttk.Frame(self, padding=6)
         toolbar.grid(row=0, column=0, sticky="ew")
@@ -33,6 +41,20 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
+        self.progress = ttk.Progressbar(
+            toolbar,
+            mode="determinate",
+            length=120,
+            maximum=100,
+            variable=self._progress_var,
+        )
+        self.progress_label = ttk.Label(toolbar, textvariable=self._progress_text)
+        self.run_button = ttk.Button(toolbar, text="Run", command=self._on_run_click)
+        self.run_button.pack(side="right", padx=4)
+        self.progress_label.pack(side="right", padx=(0, 4))
+        self.progress.pack(side="right", padx=4)
+        self.progress.pack_forget()
+        self.progress_label.pack_forget()
 
         main = ttk.Frame(self, padding=8)
         main.grid(row=1, column=0, sticky="nsew")
@@ -49,7 +71,7 @@ class BeamApp(tk.Tk):
         self.boundary_form = BoundaryForm(top_bar, on_change=self._on_boundary_change)
         self.boundary_form.pack(side="left", padx=4)
 
-        self.beam_view = BeamView(main, self.state, on_change=self._refresh_model)
+        self.beam_view = BeamView(main, self.state, on_change=self._mark_dirty)
         self.beam_view.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
 
         self.shear_view = ShearMomentView(main)
@@ -58,7 +80,51 @@ class BeamApp(tk.Tk):
         self.freq_panel = FrequencyPanel(main)
         self.freq_panel.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
 
-        self.after(50, self._refresh_model)
+        self.status_var.set("Ready (press Run)")
+
+    def _collect_support_positions(self, model, left_fixed, right_fixed, constraints):
+        supports = []
+        if left_fixed:
+            supports.append(0.0)
+        if right_fixed:
+            supports.append(model.length)
+        for constraint in constraints:
+            if constraint.fix_translation and not any(abs(s - constraint.position) < 1e-9 for s in supports):
+                supports.append(constraint.position)
+        supports.sort()
+        return supports
+
+    def _estimate_progress_steps(self, model, supports, include_frequencies, shear_points):
+        steps = 0
+        if include_frequencies:
+            steps += model.elements * 2
+            steps += len(model.point_masses) * 2
+            steps += len(model.trans_springs)
+            steps += len(model.tors_springs)
+            steps += 2
+        if not supports:
+            steps += 1
+        else:
+            steps += shear_points
+            if len(supports) == 2:
+                steps += 1
+            elif len(supports) > 2:
+                steps += len(supports) + len(supports) * len(supports) + 1
+        return max(1, steps)
+
+    def _build_progress_tracker(self, total_steps, token):
+        class _ProgressTracker:
+            def __init__(self, total, update):
+                self.total = max(1, total)
+                self.completed = 0
+                self.update = update
+
+            def step(self, count=1):
+                self.completed += count
+                percent = min(100.0, (self.completed / self.total) * 100.0)
+                self.update(percent)
+
+        return _ProgressTracker(total_steps, lambda percent: self._queue_progress(token, percent))
 
     def _add_mass_dialog(self):
         length = self.state.length
@@ -73,8 +139,8 @@ class BeamApp(tk.Tk):
         if inertia is None:
             inertia = 0.0
         self.state.point_masses.append(PointMass(position=pos, mass=mass, rotary_inertia=inertia))
-        self.status_var.set("Mass added")
-        self._refresh_model()
+        self.status_var.set("Mass added (press Run)")
+        self._mark_dirty()
 
     def _add_spring_dialog(self):
         length = self.state.length
@@ -102,8 +168,8 @@ class BeamApp(tk.Tk):
             self.state.tors_springs.append(TorsionalSpring(position=pos, k=k))
         else:
             self.state.trans_springs.append(TranslationalSpring(position=pos, k=k))
-        self.status_var.set("Spring added")
-        self._refresh_model()
+        self.status_var.set("Spring added (press Run)")
+        self._mark_dirty()
 
     def _open_beam_params(self):
         win = tk.Toplevel(self)
@@ -136,8 +202,8 @@ class BeamApp(tk.Tk):
             return
         win.destroy()
         self.state.set_beam(params)
-        self.status_var.set("Beam updated")
-        self._refresh_model()
+        self.status_var.set("Beam updated (press Run)")
+        self._mark_dirty()
 
     def _open_cross_section_dialog(self):
         dialog = CrossSectionDialog(self, self.state.length, self.state.cross_sections)
@@ -145,47 +211,31 @@ class BeamApp(tk.Tk):
         if dialog.result is None:
             return
         self.state.cross_sections = dialog.result
-        self.status_var.set("Cross sections updated")
-        self._refresh_model()
+        self.status_var.set("Cross sections updated (press Run)")
+        self._mark_dirty()
 
-    def _refresh_model(self):
-        try:
-            model = self.state.to_model()
-            bending_fixed, torsion_fixed = self._build_bc(model)
-            if not bending_fixed and not torsion_fixed:
-                bend, tors = [], []
-            else:
-                bend, tors = natural_frequencies(
-                    model, bending_fixed=bending_fixed, torsion_fixed=torsion_fixed, n_modes=5
-                )
-            x, shear, moment = shear_moment(
-                model, left_fixed=self.state.left_fixed, right_fixed=self.state.right_fixed,
-                constraints=self.state.constraints
-            )
-        except Exception:
-            bend, tors = [], []
-            x, shear, moment = [], None, None
+    def _refresh_model(self, bend, tors, x, shear, moment):
         self.freq_panel.update_values(bend, tors)
         self.freq_panel.update_shear_stats(shear, moment)
         self.beam_view.update_view()
         self.shear_view.update_view(x, shear, moment)
         self.status_var.set("Ready")
 
-    def _build_bc(self, model):
+    def _build_bc(self, model, left_fixed, right_fixed, constraints):
         import numpy as np
         bending_fixed = []
         torsion_fixed = []
-        if self.state.left_fixed:
+        if left_fixed:
             bending_fixed.extend([0, 1])
             torsion_fixed.append(0)
-        if self.state.right_fixed:
+        if right_fixed:
             last_bend = 2 * (model.elements)
             bending_fixed.extend([last_bend, last_bend + 1])
             torsion_fixed.append(model.elements)
 
         # Add constraints at arbitrary positions
         x_nodes = np.linspace(0.0, model.length, model.elements + 1)
-        for constraint in self.state.constraints:
+        for constraint in constraints:
             # Find nearest node
             node_idx = np.argmin(np.abs(x_nodes - constraint.position))
             if constraint.fix_translation:
@@ -198,11 +248,129 @@ class BeamApp(tk.Tk):
 
         return bending_fixed, torsion_fixed
 
+    def _mark_dirty(self):
+        if not self._is_running:
+            self.beam_view.update_view()
+            if "press Run" not in self.status_var.get():
+                self.status_var.set("Changes pending (press Run)")
+
+    def _on_run_click(self):
+        if self._is_running:
+            self._cancel_run()
+            return
+        self._start_run()
+
+    def _start_run(self):
+        if self._is_running:
+            return
+        self._is_running = True
+        self._cancel_requested = False
+        self._cancel_event = threading.Event()
+        self._run_token += 1
+        token = self._run_token
+        self._active_run_token = token
+        self.status_var.set("Running...")
+        self.run_button.config(text="Cancel")
+        self._set_progress(0)
+        self.progress.pack(side="right", padx=4)
+        self.progress_label.pack(side="right", padx=(0, 4))
+        snapshot = {
+            "model": self.state.to_model(),
+            "left_fixed": self.state.left_fixed,
+            "right_fixed": self.state.right_fixed,
+            "constraints": list(self.state.constraints),
+        }
+        thread = threading.Thread(target=self._run_model_thread, args=(token, snapshot), daemon=True)
+        thread.start()
+
+    def _cancel_run(self):
+        if not self._is_running:
+            return
+        self._cancel_requested = True
+        self._cancel_event.set()
+        self.status_var.set("Canceling...")
+
+    def _run_model_thread(self, token, snapshot):
+        bend, tors = [], []
+        x, shear, moment = [], None, None
+        error = None
+        try:
+            model = snapshot["model"]
+            bending_fixed, torsion_fixed = self._build_bc(
+                model,
+                snapshot["left_fixed"],
+                snapshot["right_fixed"],
+                snapshot["constraints"],
+            )
+            supports = self._collect_support_positions(
+                model,
+                snapshot["left_fixed"],
+                snapshot["right_fixed"],
+                snapshot["constraints"],
+            )
+            include_frequencies = bool(bending_fixed or torsion_fixed)
+            total_steps = self._estimate_progress_steps(model, supports, include_frequencies, 200)
+            tracker = self._build_progress_tracker(total_steps, token)
+            progress_step = tracker.step
+            if include_frequencies:
+                bend, tors = natural_frequencies(
+                    model,
+                    bending_fixed=bending_fixed,
+                    torsion_fixed=torsion_fixed,
+                    n_modes=5,
+                    progress=progress_step,
+                    cancel_event=self._cancel_event,
+                )
+            x, shear, moment = shear_moment(
+                model,
+                left_fixed=snapshot["left_fixed"],
+                right_fixed=snapshot["right_fixed"],
+                constraints=snapshot["constraints"],
+                n=200,
+                progress=progress_step,
+                cancel_event=self._cancel_event,
+            )
+        except Exception as exc:
+            error = str(exc)
+        self.after(0, lambda: self._on_run_complete(token, bend, tors, x, shear, moment, error))
+
+    def _on_run_complete(self, token, bend, tors, x, shear, moment, error):
+        if token != self._active_run_token:
+            return
+        self._is_running = False
+        self.progress.pack_forget()
+        self.progress_label.pack_forget()
+        self.run_button.config(text="Run")
+        self._set_progress(0)
+        if self._cancel_requested or error == "Canceled":
+            self.status_var.set("Canceled")
+            self._cancel_requested = False
+            return
+        if error:
+            self.status_var.set("Run failed")
+            self._cancel_requested = False
+            return
+        self._cancel_requested = False
+        self._refresh_model(bend, tors, x, shear, moment)
+
+    def _queue_progress(self, token, value: float):
+        self.after(0, lambda: self._set_progress_for_token(token, value))
+
+    def _set_progress_for_token(self, token, value: float):
+        if token != self._active_run_token:
+            return
+        self._set_progress(value)
+
+    def _set_progress(self, value: float):
+        safe_value = max(0.0, min(100.0, value))
+        self._progress_var.set(safe_value)
+        self._progress_text.set(f"{int(round(safe_value))}%")
+
     def _on_boundary_change(self, left: str, right: str):
         self.state.left_fixed = left == "fixed"
         self.state.right_fixed = right == "fixed"
-        self.status_var.set("Boundary updated")
-        self._refresh_model()
+        self.status_var.set("Boundary updated (press Run)")
+        self._mark_dirty()
 
     def _add_constraint_dialog(self):
         length = self.state.length
@@ -223,8 +391,8 @@ class BeamApp(tk.Tk):
         self.wait_window(win)
 
         self.state.constraints.append(Constraint(position=pos, fix_translation=fix_trans.get(), fix_rotation=fix_rot.get()))
-        self.status_var.set("Constraint added")
-        self._refresh_model()
+        self.status_var.set("Constraint added (press Run)")
+        self._mark_dirty()
 
     def _open_boundary_dialog(self):
         win = tk.Toplevel(self)
@@ -247,8 +415,8 @@ class BeamApp(tk.Tk):
         self.state.left_fixed = left_val == "fixed"
         self.state.right_fixed = right_val == "fixed"
         win.destroy()
-        self.status_var.set("Boundary conditions updated")
-        self._refresh_model()
+        self.status_var.set("Boundary conditions updated (press Run)")
+        self._mark_dirty()
 
 
 def run():
