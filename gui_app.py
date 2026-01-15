@@ -28,6 +28,8 @@ class BeamApp(tk.Tk):
         self._active_run_token = None
         self._cancel_requested = False
         self._is_running = False
+        self._progress_var = tk.DoubleVar(value=0.0)
+        self._progress_text = tk.StringVar(value="0%")
 
         toolbar = ttk.Frame(self, padding=6)
         toolbar.grid(row=0, column=0, sticky="ew")
@@ -38,11 +40,20 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
-        self.progress = ttk.Progressbar(toolbar, mode="indeterminate", length=120)
+        self.progress = ttk.Progressbar(
+            toolbar,
+            mode="determinate",
+            length=120,
+            maximum=100,
+            variable=self._progress_var,
+        )
+        self.progress_label = ttk.Label(toolbar, textvariable=self._progress_text)
         self.run_button = ttk.Button(toolbar, text="Run", command=self._on_run_click)
         self.run_button.pack(side="right", padx=4)
+        self.progress_label.pack(side="right", padx=(0, 4))
         self.progress.pack(side="right", padx=4)
         self.progress.pack_forget()
+        self.progress_label.pack_forget()
 
         main = ttk.Frame(self, padding=8)
         main.grid(row=1, column=0, sticky="nsew")
@@ -214,8 +225,9 @@ class BeamApp(tk.Tk):
         self._active_run_token = token
         self.status_var.set("Running...")
         self.run_button.config(text="Cancel")
+        self._set_progress(0)
         self.progress.pack(side="right", padx=4)
-        self.progress.start(10)
+        self.progress_label.pack(side="right", padx=(0, 4))
         snapshot = {
             "model": self.state.to_model(),
             "left_fixed": self.state.left_fixed,
@@ -236,6 +248,7 @@ class BeamApp(tk.Tk):
         x, shear, moment = [], None, None
         error = None
         try:
+            self._queue_progress(token, 5)
             model = snapshot["model"]
             bending_fixed, torsion_fixed = self._build_bc(
                 model,
@@ -243,16 +256,21 @@ class BeamApp(tk.Tk):
                 snapshot["right_fixed"],
                 snapshot["constraints"],
             )
+            self._queue_progress(token, 20)
             if bending_fixed or torsion_fixed:
                 bend, tors = natural_frequencies(
                     model, bending_fixed=bending_fixed, torsion_fixed=torsion_fixed, n_modes=5
                 )
+                self._queue_progress(token, 60)
+            else:
+                self._queue_progress(token, 60)
             x, shear, moment = shear_moment(
                 model,
                 left_fixed=snapshot["left_fixed"],
                 right_fixed=snapshot["right_fixed"],
                 constraints=snapshot["constraints"],
             )
+            self._queue_progress(token, 100)
         except Exception as exc:
             error = str(exc)
         self.after(0, lambda: self._on_run_complete(token, bend, tors, x, shear, moment, error))
@@ -261,9 +279,10 @@ class BeamApp(tk.Tk):
         if token != self._active_run_token:
             return
         self._is_running = False
-        self.progress.stop()
         self.progress.pack_forget()
+        self.progress_label.pack_forget()
         self.run_button.config(text="Run")
+        self._set_progress(0)
         if self._cancel_requested:
             self.status_var.set("Canceled")
             self._cancel_requested = False
@@ -274,6 +293,19 @@ class BeamApp(tk.Tk):
             return
         self._cancel_requested = False
         self._refresh_model(bend, tors, x, shear, moment)
+
+    def _queue_progress(self, token, value: float):
+        self.after(0, lambda: self._set_progress_for_token(token, value))
+
+    def _set_progress_for_token(self, token, value: float):
+        if token != self._active_run_token:
+            return
+        self._set_progress(value)
+
+    def _set_progress(self, value: float):
+        safe_value = max(0.0, min(100.0, value))
+        self._progress_var.set(safe_value)
+        self._progress_text.set(f"{int(round(safe_value))}%")
 
     def _on_boundary_change(self, left: str, right: str):
         self.state.left_fixed = left == "fixed"
