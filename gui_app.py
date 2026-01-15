@@ -14,6 +14,7 @@ from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
 from shear_moment import shear_moment
 from shear_moment_view import ShearMomentView
+from si_prefix import prefix_labels, prefix_multiplier
 
 
 class BeamApp(tk.Tk):
@@ -266,16 +267,37 @@ class CrossSectionDialog(tk.Toplevel):
         self.start_var = tk.StringVar(value="0.0")
         self.end_var = tk.StringVar(value=f"{length:g}")
         self.radius_var = tk.StringVar(value="0.05")
+        self.start_prefix_var = tk.StringVar(value="m")
+        self.end_prefix_var = tk.StringVar(value="m")
+        self.radius_prefix_var = tk.StringVar(value="m")
 
         form = ttk.Frame(self, padding=8)
         form.pack(fill="both", expand=True)
         ttk.Label(form, text="Start x [m]").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         ttk.Entry(form, textvariable=self.start_var, width=12).grid(row=0, column=1, sticky="ew", padx=4, pady=2)
-        ttk.Label(form, text="End x [m]").grid(row=0, column=2, sticky="w", padx=4, pady=2)
-        ttk.Entry(form, textvariable=self.end_var, width=12).grid(row=0, column=3, sticky="ew", padx=4, pady=2)
-        ttk.Label(form, text="Radius [m]").grid(row=0, column=4, sticky="w", padx=4, pady=2)
-        ttk.Entry(form, textvariable=self.radius_var, width=12).grid(row=0, column=5, sticky="ew", padx=4, pady=2)
-        ttk.Button(form, text="Add", command=self._add_section).grid(row=0, column=6, padx=4, pady=2)
+        ttk.OptionMenu(
+            form,
+            self.start_prefix_var,
+            self.start_prefix_var.get(),
+            *prefix_labels("m"),
+        ).grid(row=0, column=2, sticky="w", padx=4, pady=2)
+        ttk.Label(form, text="End x [m]").grid(row=0, column=3, sticky="w", padx=4, pady=2)
+        ttk.Entry(form, textvariable=self.end_var, width=12).grid(row=0, column=4, sticky="ew", padx=4, pady=2)
+        ttk.OptionMenu(
+            form,
+            self.end_prefix_var,
+            self.end_prefix_var.get(),
+            *prefix_labels("m"),
+        ).grid(row=0, column=5, sticky="w", padx=4, pady=2)
+        ttk.Label(form, text="Radius [m]").grid(row=0, column=6, sticky="w", padx=4, pady=2)
+        ttk.Entry(form, textvariable=self.radius_var, width=12).grid(row=0, column=7, sticky="ew", padx=4, pady=2)
+        ttk.OptionMenu(
+            form,
+            self.radius_prefix_var,
+            self.radius_prefix_var.get(),
+            *prefix_labels("m"),
+        ).grid(row=0, column=8, sticky="w", padx=4, pady=2)
+        ttk.Button(form, text="Add", command=self._add_section).grid(row=0, column=9, padx=4, pady=2)
 
         self.tree = ttk.Treeview(form, columns=("start", "end", "radius"), show="headings", height=6)
         self.tree.heading("start", text="Start [m]")
@@ -284,10 +306,10 @@ class CrossSectionDialog(tk.Toplevel):
         self.tree.column("start", width=90, anchor="center")
         self.tree.column("end", width=90, anchor="center")
         self.tree.column("radius", width=90, anchor="center")
-        self.tree.grid(row=1, column=0, columnspan=7, sticky="nsew", padx=4, pady=6)
+        self.tree.grid(row=1, column=0, columnspan=10, sticky="nsew", padx=4, pady=6)
 
         btns = ttk.Frame(form)
-        btns.grid(row=2, column=0, columnspan=7, sticky="ew")
+        btns.grid(row=2, column=0, columnspan=10, sticky="ew")
         ttk.Button(btns, text="Remove Selected", command=self._remove_selected).pack(side="left", padx=4)
         ttk.Button(btns, text="Clear", command=self._clear_sections).pack(side="left", padx=4)
         ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=4)
@@ -296,7 +318,7 @@ class CrossSectionDialog(tk.Toplevel):
         for section in self.sections:
             self._insert_row(section)
 
-        for col in range(7):
+        for col in range(10):
             form.columnconfigure(col, weight=1)
 
         self.transient(master)
@@ -310,9 +332,9 @@ class CrossSectionDialog(tk.Toplevel):
 
     def _add_section(self):
         try:
-            start = float(self.start_var.get())
-            end = float(self.end_var.get())
-            radius = float(self.radius_var.get())
+            start = float(self.start_var.get()) * prefix_multiplier(self.start_prefix_var.get(), "m")
+            end = float(self.end_var.get()) * prefix_multiplier(self.end_prefix_var.get(), "m")
+            radius = float(self.radius_var.get()) * prefix_multiplier(self.radius_prefix_var.get(), "m")
         except ValueError:
             return
 
