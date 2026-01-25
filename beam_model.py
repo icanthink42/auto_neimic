@@ -4,6 +4,7 @@ from typing import List
 import numpy as np
 
 from cross_section import CrossSection
+from distributed_load import DistributedLoad
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
@@ -21,6 +22,7 @@ class BeamModel:
     point_masses: List[PointMass] = field(default_factory=list)
     trans_springs: List[TranslationalSpring] = field(default_factory=list)
     tors_springs: List[TorsionalSpring] = field(default_factory=list)
+    distributed_loads: List[DistributedLoad] = field(default_factory=list)
 
     @property
     def area(self) -> float:

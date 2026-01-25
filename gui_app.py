@@ -7,6 +7,7 @@ from boundary_form import BoundaryForm
 from beam_view import BeamView
 from constraint import Constraint
 from cross_section import CrossSection
+from distributed_load import DistributedLoad
 from fem import natural_frequencies
 from frequency_panel import FrequencyPanel
 from gui_state import BeamUIState
@@ -38,6 +39,7 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Cross Sections", command=self._open_cross_section_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Mass", command=self._add_mass_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Spring", command=self._add_spring_dialog).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Add Dist. Load", command=self._add_distributed_load_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
@@ -169,6 +171,29 @@ class BeamApp(tk.Tk):
         else:
             self.state.trans_springs.append(TranslationalSpring(position=pos, k=k))
         self.status_var.set("Spring added (press Run)")
+        self._mark_dirty()
+
+    def _add_distributed_load_dialog(self):
+        length = self.state.length
+        start = simpledialog.askfloat("Start position", f"Start x along beam [0, {length} m]:", parent=self, initialvalue=0.0)
+        if start is None:
+            return
+        start = max(0.0, min(length, start))
+
+        end = simpledialog.askfloat("End position", f"End x along beam [{start}, {length} m]:", parent=self, initialvalue=length)
+        if end is None:
+            return
+        end = max(start, min(length, end))
+
+        if end <= start:
+            return
+
+        force = simpledialog.askfloat("Add distributed load", "Force per length [N/m]:", parent=self, initialvalue=1000.0)
+        if force is None:
+            return
+
+        self.state.distributed_loads.append(DistributedLoad(start=start, end=end, force_per_length=force))
+        self.status_var.set("Distributed load added (press Run)")
         self._mark_dirty()
 
     def _open_beam_params(self):
