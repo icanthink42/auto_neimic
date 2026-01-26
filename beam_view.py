@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from constraint import Constraint
+from distributed_load import DistributedLoad
 from gui_state import BeamUIState
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
@@ -108,6 +109,25 @@ class BeamView(ttk.LabelFrame):
             label = "+".join(label_parts) if label_parts else "?"
             self.canvas.create_text(cx, y + 32, text=label, fill="#e67e22", tags=tags)
 
+        for i, dist_load in enumerate(self.state.distributed_loads):
+            cx_start = self._to_canvas_x(dist_load.start, length, x0, x1)
+            cx_end = self._to_canvas_x(dist_load.end, length, x0, x1)
+            tags = ("dist_load", f"dist_load-{i}")
+
+            # Draw a horizontal line representing the extent of the load
+            self.canvas.create_line(cx_start, y - 35, cx_end, y - 35, fill="#3498db", width=2, tags=tags)
+
+            # Draw multiple arrows along the distributed load region
+            num_arrows = max(3, int((cx_end - cx_start) / 30))
+            for j in range(num_arrows + 1):
+                arrow_x = cx_start + (cx_end - cx_start) * j / num_arrows
+                # Draw arrow pointing down
+                self.canvas.create_line(arrow_x, y - 35, arrow_x, y - 15, fill="#3498db", width=2, arrow=tk.LAST, tags=tags)
+
+            # Label with force value at center
+            cx_mid = (cx_start + cx_end) / 2
+            self.canvas.create_text(cx_mid, y - 42, text=f"w={dist_load.force_per_length:g}", fill="#2980b9", tags=tags)
+
     def _on_right_click(self, event):
         item = self.canvas.find_withtag("current")
         if not item:
@@ -139,6 +159,13 @@ class BeamView(ttk.LabelFrame):
                 idx = int(tag.split("-")[1])
                 if 0 <= idx < len(self.state.constraints):
                     self.state.constraints.pop(idx)
+                    self.on_change()
+                    self.update_view()
+                    return
+            if tag.startswith("dist_load-"):
+                idx = int(tag.split("-")[1])
+                if 0 <= idx < len(self.state.distributed_loads):
+                    self.state.distributed_loads.pop(idx)
                     self.on_change()
                     self.update_view()
                     return

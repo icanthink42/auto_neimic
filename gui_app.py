@@ -7,9 +7,11 @@ from boundary_form import BoundaryForm
 from beam_view import BeamView
 from constraint import Constraint
 from cross_section import CrossSection
-from fem import natural_frequencies
+from distributed_load import DistributedLoad
+from fem import natural_frequencies, natural_frequencies_and_modes
 from frequency_panel import FrequencyPanel
 from gui_state import BeamUIState
+from mode_shape_view import ModeShapeView
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
@@ -38,6 +40,7 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Cross Sections", command=self._open_cross_section_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Mass", command=self._add_mass_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Spring", command=self._add_spring_dialog).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Add Dist. Load", command=self._add_distributed_load_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
@@ -64,7 +67,8 @@ class BeamApp(tk.Tk):
         main.rowconfigure(0, weight=0)
         main.rowconfigure(1, weight=1)
         main.rowconfigure(2, weight=1)
-        main.rowconfigure(3, weight=0)
+        main.rowconfigure(3, weight=1)
+        main.rowconfigure(4, weight=0)
 
         top_bar = ttk.Frame(main)
         top_bar.grid(row=0, column=0, sticky="ew", padx=4, pady=2)
@@ -77,8 +81,11 @@ class BeamApp(tk.Tk):
         self.shear_view = ShearMomentView(main)
         self.shear_view.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
 
+        self.mode_view = ModeShapeView(main)
+        self.mode_view.grid(row=3, column=0, sticky="nsew", padx=4, pady=4)
+
         self.freq_panel = FrequencyPanel(main)
-        self.freq_panel.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
+        self.freq_panel.grid(row=4, column=0, sticky="ew", padx=4, pady=4)
 
         self.status_var.set("Ready (press Run)")
 
@@ -171,6 +178,29 @@ class BeamApp(tk.Tk):
         self.status_var.set("Spring added (press Run)")
         self._mark_dirty()
 
+    def _add_distributed_load_dialog(self):
+        length = self.state.length
+        start = simpledialog.askfloat("Start position", f"Start x along beam [0, {length} m]:", parent=self, initialvalue=0.0)
+        if start is None:
+            return
+        start = max(0.0, min(length, start))
+
+        end = simpledialog.askfloat("End position", f"End x along beam [{start}, {length} m]:", parent=self, initialvalue=length)
+        if end is None:
+            return
+        end = max(start, min(length, end))
+
+        if end <= start:
+            return
+
+        force = simpledialog.askfloat("Add distributed load", "Force per length [N/m]:", parent=self, initialvalue=1000.0)
+        if force is None:
+            return
+
+        self.state.distributed_loads.append(DistributedLoad(start=start, end=end, force_per_length=force))
+        self.status_var.set("Distributed load added (press Run)")
+        self._mark_dirty()
+
     def _open_beam_params(self):
         win = tk.Toplevel(self)
         win.title("Beam parameters")
@@ -214,11 +244,27 @@ class BeamApp(tk.Tk):
         self.status_var.set("Cross sections updated (press Run)")
         self._mark_dirty()
 
-    def _refresh_model(self, bend, tors, x, shear, moment):
+    def _refresh_model(self, bend, tors, x, shear, moment, bend_modes=None, tors_modes=None, bending_fixed=None, torsion_fixed=None):
         self.freq_panel.update_values(bend, tors)
         self.freq_panel.update_shear_stats(shear, moment)
         self.beam_view.update_view()
         self.shear_view.update_view(x, shear, moment)
+        
+        # Update mode shape view if we have mode data
+        if bend_modes is not None and tors_modes is not None:
+            model = self.state.to_model()
+            n_nodes = model.elements + 1
+            self.mode_view.update_modes(
+                beam_length=model.length,
+                n_nodes=n_nodes,
+                bend_freqs=bend,
+                tors_freqs=tors,
+                bend_modes=bend_modes,
+                tors_modes=tors_modes,
+                bending_fixed=bending_fixed or [],
+                torsion_fixed=torsion_fixed or [],
+            )
+        
         self.status_var.set("Ready")
 
     def _build_bc(self, model, left_fixed, right_fixed, constraints):
@@ -292,6 +338,8 @@ class BeamApp(tk.Tk):
 
     def _run_model_thread(self, token, snapshot):
         bend, tors = [], []
+        bend_modes, tors_modes = None, None
+        bending_fixed_out, torsion_fixed_out = [], []
         x, shear, moment = [], None, None
         error = None
         try:
@@ -313,7 +361,7 @@ class BeamApp(tk.Tk):
             tracker = self._build_progress_tracker(total_steps, token)
             progress_step = tracker.step
             if include_frequencies:
-                bend, tors = natural_frequencies(
+                bend, tors, bend_modes, tors_modes, bending_fixed_out, torsion_fixed_out = natural_frequencies_and_modes(
                     model,
                     bending_fixed=bending_fixed,
                     torsion_fixed=torsion_fixed,
@@ -332,9 +380,9 @@ class BeamApp(tk.Tk):
             )
         except Exception as exc:
             error = str(exc)
-        self.after(0, lambda: self._on_run_complete(token, bend, tors, x, shear, moment, error))
+        self.after(0, lambda: self._on_run_complete(token, bend, tors, x, shear, moment, error, bend_modes, tors_modes, bending_fixed_out, torsion_fixed_out))
 
-    def _on_run_complete(self, token, bend, tors, x, shear, moment, error):
+    def _on_run_complete(self, token, bend, tors, x, shear, moment, error, bend_modes=None, tors_modes=None, bending_fixed=None, torsion_fixed=None):
         if token != self._active_run_token:
             return
         self._is_running = False
@@ -351,7 +399,7 @@ class BeamApp(tk.Tk):
             self._cancel_requested = False
             return
         self._cancel_requested = False
-        self._refresh_model(bend, tors, x, shear, moment)
+        self._refresh_model(bend, tors, x, shear, moment, bend_modes, tors_modes, bending_fixed, torsion_fixed)
 
     def _queue_progress(self, token, value: float):
         self.after(0, lambda: self._set_progress_for_token(token, value))

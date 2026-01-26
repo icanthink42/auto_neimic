@@ -20,7 +20,15 @@ def _cumulative_trapz(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 def _distributed_load(model: BeamModel, x: np.ndarray, g: float) -> np.ndarray:
     radii = np.array([model.radius_at(xi) for xi in x])
     areas = np.array([model.area_for_radius(r) for r in radii])
-    return model.density * areas * g
+    w = model.density * areas * g
+
+    # Add user-defined distributed loads
+    for dist_load in model.distributed_loads:
+        # Add load where x is within the range [start, end]
+        mask = (x >= dist_load.start) & (x <= dist_load.end)
+        w[mask] += dist_load.force_per_length
+
+    return w
 
 
 ProgressCallback = Callable[[int], None]
