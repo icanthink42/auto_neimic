@@ -174,6 +174,41 @@ def solve_frequencies(K: np.ndarray, M: np.ndarray, n_modes: int) -> np.ndarray:
     return omegas[: min(n_modes, len(omegas))] / (2 * np.pi)
 
 
+def solve_modes(
+    K: np.ndarray, M: np.ndarray, n_modes: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Solve for natural frequencies and mode shapes.
+    
+    Returns:
+        frequencies: Natural frequencies in Hz
+        mode_shapes: Mode shape vectors (columns are modes)
+    """
+    A = np.linalg.solve(M, K)
+    eigvals, eigvecs = np.linalg.eig(A)
+    
+    # Filter positive eigenvalues
+    mask = eigvals > 0
+    eigvals = np.real(eigvals[mask])
+    eigvecs = np.real(eigvecs[:, mask])
+    
+    # Sort by eigenvalue
+    idx = np.argsort(eigvals)
+    eigvals = eigvals[idx]
+    eigvecs = eigvecs[:, idx]
+    
+    # Convert to frequencies
+    omegas = np.sqrt(eigvals) / (2 * np.pi)
+    
+    # Normalize mode shapes by maximum displacement
+    for i in range(eigvecs.shape[1]):
+        max_val = np.max(np.abs(eigvecs[:, i]))
+        if max_val > 1e-10:
+            eigvecs[:, i] /= max_val
+    
+    n = min(n_modes, len(omegas))
+    return omegas[:n], eigvecs[:, :n]
+
+
 def natural_frequencies(
     model: BeamModel,
     bending_fixed: Sequence[int],
@@ -193,3 +228,35 @@ def natural_frequencies(
     tors = solve_frequencies(Kt_r, Mt_r, n_modes)
     _report_progress(progress)
     return bend, tors
+
+
+def natural_frequencies_and_modes(
+    model: BeamModel,
+    bending_fixed: Sequence[int],
+    torsion_fixed: Sequence[int],
+    n_modes: int = 6,
+    progress: Optional[ProgressCallback] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Sequence[int], Sequence[int]]:
+    """Compute natural frequencies and mode shapes.
+    
+    Returns:
+        bend_freq: Bending natural frequencies [Hz]
+        tors_freq: Torsion natural frequencies [Hz]
+        bend_modes: Bending mode shapes (reduced DOFs)
+        tors_modes: Torsion mode shapes (reduced DOFs)
+        bending_fixed: Fixed bending DOFs (for reconstruction)
+        torsion_fixed: Fixed torsion DOFs (for reconstruction)
+    """
+    Kb, Mb = assemble_bending(model, progress=progress, cancel_event=cancel_event)
+    Kt, Mt = assemble_torsion(model, progress=progress, cancel_event=cancel_event)
+
+    Kb_r, Mb_r = apply_boundary_conditions(Kb, Mb, bending_fixed)
+    Kt_r, Mt_r = apply_boundary_conditions(Kt, Mt, torsion_fixed)
+
+    bend_freq, bend_modes = solve_modes(Kb_r, Mb_r, n_modes)
+    _report_progress(progress)
+    tors_freq, tors_modes = solve_modes(Kt_r, Mt_r, n_modes)
+    _report_progress(progress)
+    
+    return bend_freq, tors_freq, bend_modes, tors_modes, bending_fixed, torsion_fixed
