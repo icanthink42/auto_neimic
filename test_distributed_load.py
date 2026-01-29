@@ -8,22 +8,24 @@ from shear_moment import shear_moment
 def test_distributed_load_simple():
     """Test a simple beam with a uniform distributed load."""
     # Create a simple beam
+    g = 9.81  # gravity [m/s^2]
+    mass_per_length = 102.0  # kg/m (equivalent to ~1000 N/m)
     model = BeamModel(
         length=2.0,
         radius=0.05,
         elastic_modulus=200e9,
         shear_modulus=79.3e9,
-        density=7850,
+        density=0.0,  # Disable structural self-weight
         elements=20,
         distributed_loads=[
-            DistributedLoad(start=0.5, end=1.5, force_per_length=1000.0)
+            DistributedLoad(start=0.5, end=1.5, mass_per_length=mass_per_length)
         ]
     )
 
     # Calculate shear and moment (simply supported beam)
     x, shear, moment = shear_moment(
         model,
-        g=0.0,  # Disable gravity to test only the applied load
+        g=g,
         n=100,
         left_fixed=True,
         right_fixed=True,
@@ -40,8 +42,8 @@ def test_distributed_load_simple():
 
     # Check that shear and moment are non-zero in the region with load
     # The reactions should balance the total load
-    total_load = 1000.0 * (1.5 - 0.5)  # force_per_length * length
-    print(f"Total applied load: {total_load} N")
+    total_load = mass_per_length * g * (1.5 - 0.5)  # mass_per_length * g * length
+    print(f"Total applied load: {total_load:.1f} N")
 
     # Maximum moment should be somewhere in the middle
     max_moment_idx = np.argmax(np.abs(moment))
@@ -56,22 +58,23 @@ def test_distributed_load_simple():
 
 def test_multiple_distributed_loads():
     """Test a beam with multiple distributed loads."""
+    g = 9.81
     model = BeamModel(
         length=3.0,
         radius=0.05,
         elastic_modulus=200e9,
         shear_modulus=79.3e9,
-        density=7850,
+        density=0.0,  # Disable structural self-weight
         elements=30,
         distributed_loads=[
-            DistributedLoad(start=0.0, end=1.0, force_per_length=500.0),
-            DistributedLoad(start=2.0, end=3.0, force_per_length=1000.0)
+            DistributedLoad(start=0.0, end=1.0, mass_per_length=51.0),  # ~500 N/m
+            DistributedLoad(start=2.0, end=3.0, mass_per_length=102.0)  # ~1000 N/m
         ]
     )
 
     x, shear, moment = shear_moment(
         model,
-        g=0.0,
+        g=g,
         n=150,
         left_fixed=True,
         right_fixed=True,

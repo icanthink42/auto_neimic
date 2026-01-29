@@ -22,11 +22,11 @@ def _distributed_load(model: BeamModel, x: np.ndarray, g: float) -> np.ndarray:
     areas = np.array([model.area_for_radius(r) for r in radii])
     w = model.density * areas * g
 
-    # Add user-defined distributed loads
+    # Add user-defined distributed loads (convert mass to force)
     for dist_load in model.distributed_loads:
         # Add load where x is within the range [start, end]
         mask = (x >= dist_load.start) & (x <= dist_load.end)
-        w[mask] += dist_load.force_per_length
+        w[mask] += dist_load.mass_per_length * g
 
     return w
 

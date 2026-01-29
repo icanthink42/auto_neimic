@@ -63,14 +63,28 @@ def assemble_bending(
         ]
     )
 
+    x_nodes = beam_nodes(model)
     radii = model.element_radii()
     for e in range(model.elements):
         _check_cancel(cancel_event)
         radius = radii[e] if e < len(radii) else model.radius
         EI = model.elastic_modulus * model.inertia_for_radius(radius)
         rhoA = model.density * model.area_for_radius(radius)
+
+        # Start with structural mass
+        additional_mass_per_length = 0.0
+
+        # Add distributed loads as mass
+        x_elem_center = (x_nodes[e] + x_nodes[e + 1]) / 2
+        for dist_load in model.distributed_loads:
+            if dist_load.start <= x_elem_center <= dist_load.end:
+                additional_mass_per_length += dist_load.mass_per_length
+
+        # Total mass per length
+        total_rhoA = rhoA + additional_mass_per_length
+
         k_local = (EI / L_e**3) * k_template
-        m_local = (rhoA * L_e / 420) * m_template
+        m_local = (total_rhoA * L_e / 420) * m_template
         idx = 2 * e
         dofs = [idx, idx + 1, idx + 2, idx + 3]
         K[np.ix_(dofs, dofs)] += k_local
@@ -116,14 +130,26 @@ def assemble_torsion(
     k_template = np.array([[1, -1], [-1, 1]])
     m_template = np.array([[2, 1], [1, 2]])
 
+    x_nodes = beam_nodes(model)
     radii = model.element_radii()
     for e in range(model.elements):
         _check_cancel(cancel_event)
         radius = radii[e] if e < len(radii) else model.radius
         GJ = model.shear_modulus * model.polar_inertia_for_radius(radius)
         rhoJ = model.density * model.polar_inertia_for_radius(radius)
+
+        # Add distributed loads as rotary inertia (mass * radius^2 / 2)
+        additional_rhoJ = 0.0
+        x_elem_center = (x_nodes[e] + x_nodes[e + 1]) / 2
+        for dist_load in model.distributed_loads:
+            if dist_load.start <= x_elem_center <= dist_load.end:
+                # Approximate rotary inertia per length for distributed mass
+                additional_rhoJ += dist_load.mass_per_length * (radius ** 2) / 2
+
+        total_rhoJ = rhoJ + additional_rhoJ
+
         k_local = (GJ / L_e) * k_template
-        m_local = (rhoJ * L_e / 6) * m_template
+        m_local = (total_rhoJ * L_e / 6) * m_template
         dofs = [e, e + 1]
         K[np.ix_(dofs, dofs)] += k_local
         M[np.ix_(dofs, dofs)] += m_local
@@ -178,33 +204,33 @@ def solve_modes(
     K: np.ndarray, M: np.ndarray, n_modes: int
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Solve for natural frequencies and mode shapes.
-    
+
     Returns:
         frequencies: Natural frequencies in Hz
         mode_shapes: Mode shape vectors (columns are modes)
     """
     A = np.linalg.solve(M, K)
     eigvals, eigvecs = np.linalg.eig(A)
-    
+
     # Filter positive eigenvalues
     mask = eigvals > 0
     eigvals = np.real(eigvals[mask])
     eigvecs = np.real(eigvecs[:, mask])
-    
+
     # Sort by eigenvalue
     idx = np.argsort(eigvals)
     eigvals = eigvals[idx]
     eigvecs = eigvecs[:, idx]
-    
+
     # Convert to frequencies
     omegas = np.sqrt(eigvals) / (2 * np.pi)
-    
+
     # Normalize mode shapes by maximum displacement
     for i in range(eigvecs.shape[1]):
         max_val = np.max(np.abs(eigvecs[:, i]))
         if max_val > 1e-10:
             eigvecs[:, i] /= max_val
-    
+
     n = min(n_modes, len(omegas))
     return omegas[:n], eigvecs[:, :n]
 
@@ -239,7 +265,7 @@ def natural_frequencies_and_modes(
     cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Sequence[int], Sequence[int]]:
     """Compute natural frequencies and mode shapes.
-    
+
     Returns:
         bend_freq: Bending natural frequencies [Hz]
         tors_freq: Torsion natural frequencies [Hz]
@@ -258,5 +284,5 @@ def natural_frequencies_and_modes(
     _report_progress(progress)
     tors_freq, tors_modes = solve_modes(Kt_r, Mt_r, n_modes)
     _report_progress(progress)
-    
+
     return bend_freq, tors_freq, bend_modes, tors_modes, bending_fixed, torsion_fixed

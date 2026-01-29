@@ -15,7 +15,7 @@ from mode_shape_view import ModeShapeView
 from point_mass import PointMass
 from torsional_spring import TorsionalSpring
 from translational_spring import TranslationalSpring
-from shear_moment import shear_moment
+from shear_moment import shear_moment, GRAVITY
 from shear_moment_view import ShearMomentView
 from si_prefix import prefix_labels, prefix_multiplier
 
@@ -40,7 +40,7 @@ class BeamApp(tk.Tk):
         ttk.Button(toolbar, text="Cross Sections", command=self._open_cross_section_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Mass", command=self._add_mass_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Spring", command=self._add_spring_dialog).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Add Dist. Load", command=self._add_distributed_load_dialog).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Add Dist. Mass", command=self._add_distributed_load_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
@@ -193,12 +193,12 @@ class BeamApp(tk.Tk):
         if end <= start:
             return
 
-        force = simpledialog.askfloat("Add distributed load", "Force per length [N/m]:", parent=self, initialvalue=1000.0)
-        if force is None:
+        mass = simpledialog.askfloat("Add distributed mass", "Mass per length [kg/m]:", parent=self, initialvalue=100.0)
+        if mass is None:
             return
 
-        self.state.distributed_loads.append(DistributedLoad(start=start, end=end, force_per_length=force))
-        self.status_var.set("Distributed load added (press Run)")
+        self.state.distributed_loads.append(DistributedLoad(start=start, end=end, mass_per_length=mass))
+        self.status_var.set("Distributed mass added (press Run)")
         self._mark_dirty()
 
     def _open_beam_params(self):
@@ -249,7 +249,7 @@ class BeamApp(tk.Tk):
         self.freq_panel.update_shear_stats(shear, moment)
         self.beam_view.update_view()
         self.shear_view.update_view(x, shear, moment)
-        
+
         # Update mode shape view if we have mode data
         if bend_modes is not None and tors_modes is not None:
             model = self.state.to_model()
@@ -264,7 +264,7 @@ class BeamApp(tk.Tk):
                 bending_fixed=bending_fixed or [],
                 torsion_fixed=torsion_fixed or [],
             )
-        
+
         self.status_var.set("Ready")
 
     def _build_bc(self, model, left_fixed, right_fixed, constraints):
@@ -371,6 +371,7 @@ class BeamApp(tk.Tk):
                 )
             x, shear, moment = shear_moment(
                 model,
+                g=GRAVITY,
                 left_fixed=snapshot["left_fixed"],
                 right_fixed=snapshot["right_fixed"],
                 constraints=snapshot["constraints"],

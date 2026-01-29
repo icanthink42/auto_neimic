@@ -124,9 +124,9 @@ class BeamView(ttk.LabelFrame):
                 # Draw arrow pointing down
                 self.canvas.create_line(arrow_x, y - 35, arrow_x, y - 15, fill="#3498db", width=2, arrow=tk.LAST, tags=tags)
 
-            # Label with force value at center
+            # Label with mass value at center
             cx_mid = (cx_start + cx_end) / 2
-            self.canvas.create_text(cx_mid, y - 42, text=f"w={dist_load.force_per_length:g}", fill="#2980b9", tags=tags)
+            self.canvas.create_text(cx_mid, y - 42, text=f"m={dist_load.mass_per_length:g} kg/m", fill="#2980b9", tags=tags)
 
     def _on_right_click(self, event):
         item = self.canvas.find_withtag("current")

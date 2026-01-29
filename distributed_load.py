@@ -5,5 +5,5 @@ from dataclasses import dataclass
 class DistributedLoad:
     start: float  # Start position along beam [m]
     end: float    # End position along beam [m]
-    force_per_length: float  # Force per unit length [N/m]
+    mass_per_length: float  # Mass per unit length [kg/m]
 
