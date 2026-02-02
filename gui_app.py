@@ -1,6 +1,7 @@
+import pickle
 import threading
 import tkinter as tk
-from tkinter import ttk, simpledialog
+from tkinter import ttk, simpledialog, filedialog, messagebox
 
 from beam_form import BeamForm
 from boundary_form import BoundaryForm
@@ -33,15 +34,44 @@ class BeamApp(tk.Tk):
         self._cancel_event = threading.Event()
         self._progress_var = tk.DoubleVar(value=0.0)
         self._progress_text = tk.StringVar(value="0%")
+        self.current_file = None
+
+        # Create menu bar
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Save", command=self._save_setup)
+        file_menu.add_command(label="Save As...", command=self._save_setup_as)
+        file_menu.add_command(label="Load", command=self._load_setup)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.quit)
 
         toolbar = ttk.Frame(self, padding=6)
         toolbar.grid(row=0, column=0, sticky="ew")
+
+        # File dropdown
+        file_btn = ttk.Menubutton(toolbar, text="File")
+        file_btn.pack(side="left", padx=4)
+        file_dropdown = tk.Menu(file_btn, tearoff=0)
+        file_btn.config(menu=file_dropdown)
+        file_dropdown.add_command(label="Save", command=self._save_setup)
+        file_dropdown.add_command(label="Save As...", command=self._save_setup_as)
+        file_dropdown.add_command(label="Load...", command=self._load_setup)
+
+        # Add dropdown
+        add_btn = ttk.Menubutton(toolbar, text="Add")
+        add_btn.pack(side="left", padx=4)
+        add_dropdown = tk.Menu(add_btn, tearoff=0)
+        add_btn.config(menu=add_dropdown)
+        add_dropdown.add_command(label="Add Mass", command=self._add_mass_dialog)
+        add_dropdown.add_command(label="Add Spring", command=self._add_spring_dialog)
+        add_dropdown.add_command(label="Add Dist. Mass", command=self._add_distributed_load_dialog)
+        add_dropdown.add_command(label="Add Constraint", command=self._add_constraint_dialog)
+
         ttk.Button(toolbar, text="Beam Params", command=self._open_beam_params).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Cross Sections", command=self._open_cross_section_dialog).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Add Mass", command=self._add_mass_dialog).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Add Spring", command=self._add_spring_dialog).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Add Dist. Mass", command=self._add_distributed_load_dialog).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Add Constraint", command=self._add_constraint_dialog).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Boundary Conds", command=self._open_boundary_dialog).pack(side="left", padx=4)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="right")
         self.progress = ttk.Progressbar(
@@ -466,6 +496,98 @@ class BeamApp(tk.Tk):
         win.destroy()
         self.status_var.set("Boundary conditions updated (press Run)")
         self._mark_dirty()
+
+    def _save_setup(self):
+        """Save the current setup to the current file, or prompt for a filename if none exists."""
+        if self.current_file is None:
+            self._save_setup_as()
+        else:
+            self._save_to_file(self.current_file)
+
+    def _save_setup_as(self):
+        """Prompt for a filename and save the current setup."""
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".niemiec",
+            filetypes=[("Niemiec files", "*.niemiec"), ("All files", "*.*")],
+            title="Save Setup As"
+        )
+        if filename:
+            self._save_to_file(filename)
+            self.current_file = filename
+
+    def _save_to_file(self, filename: str):
+        """Save the current state to a file using pickle."""
+        try:
+            # Create a dictionary with all the state data
+            save_data = {
+                'length': self.state.length,
+                'radius': self.state.radius,
+                'elastic_modulus': self.state.elastic_modulus,
+                'shear_modulus': self.state.shear_modulus,
+                'density': self.state.density,
+                'elements': self.state.elements,
+                'cross_sections': self.state.cross_sections,
+                'point_masses': self.state.point_masses,
+                'trans_springs': self.state.trans_springs,
+                'tors_springs': self.state.tors_springs,
+                'distributed_loads': self.state.distributed_loads,
+                'constraints': self.state.constraints,
+                'left_fixed': self.state.left_fixed,
+                'right_fixed': self.state.right_fixed,
+            }
+
+            with open(filename, 'wb') as f:
+                pickle.dump(save_data, f)
+
+            self.status_var.set(f"Saved to {filename}")
+            messagebox.showinfo("Success", f"Setup saved successfully to {filename}")
+        except Exception as e:
+            self.status_var.set("Save failed")
+            messagebox.showerror("Error", f"Failed to save setup: {str(e)}")
+
+    def _load_setup(self):
+        """Prompt for a filename and load a setup."""
+        filename = filedialog.askopenfilename(
+            defaultextension=".niemiec",
+            filetypes=[("Niemiec files", "*.niemiec"), ("All files", "*.*")],
+            title="Load Setup"
+        )
+        if filename:
+            self._load_from_file(filename)
+            self.current_file = filename
+
+    def _load_from_file(self, filename: str):
+        """Load state from a file using pickle."""
+        try:
+            with open(filename, 'rb') as f:
+                save_data = pickle.load(f)
+
+            # Restore all state data
+            self.state.length = save_data.get('length', 2.0)
+            self.state.radius = save_data.get('radius', 0.05)
+            self.state.elastic_modulus = save_data.get('elastic_modulus', 200e9)
+            self.state.shear_modulus = save_data.get('shear_modulus', 79.3e9)
+            self.state.density = save_data.get('density', 7850)
+            self.state.elements = save_data.get('elements', 20)
+            self.state.cross_sections = save_data.get('cross_sections', [])
+            self.state.point_masses = save_data.get('point_masses', [])
+            self.state.trans_springs = save_data.get('trans_springs', [])
+            self.state.tors_springs = save_data.get('tors_springs', [])
+            self.state.distributed_loads = save_data.get('distributed_loads', [])
+            self.state.constraints = save_data.get('constraints', [])
+            self.state.left_fixed = save_data.get('left_fixed', True)
+            self.state.right_fixed = save_data.get('right_fixed', False)
+
+            # Update the boundary form to reflect the loaded state
+            self.boundary_form.set_values(self.state.left_fixed, self.state.right_fixed)
+
+            # Mark as dirty to trigger a refresh
+            self._mark_dirty()
+            self.status_var.set(f"Loaded from {filename} (press Run)")
+            messagebox.showinfo("Success", f"Setup loaded successfully from {filename}")
+        except Exception as e:
+            self.status_var.set("Load failed")
+            messagebox.showerror("Error", f"Failed to load setup: {str(e)}")
 
 
 def run():
