@@ -89,16 +89,33 @@ class BeamApp(tk.Tk):
         self.progress.pack_forget()
         self.progress_label.pack_forget()
 
-        main = ttk.Frame(self, padding=8)
-        main.grid(row=1, column=0, sticky="nsew")
+        # Create a canvas with scrollbar for the entire main area
+        main_canvas = tk.Canvas(self, highlightthickness=0)
+        main_canvas.grid(row=1, column=0, sticky="nsew")
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
+
+        main_scrollbar = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
+        main_scrollbar.grid(row=1, column=1, sticky="ns")
+        main_canvas.configure(yscrollcommand=main_scrollbar.set)
+
+        # Create the main frame inside the canvas
+        main = ttk.Frame(main_canvas, padding=8)
+        main_window = main_canvas.create_window((0, 0), window=main, anchor="nw")
+
+        # Configure the main frame
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=0)
-        main.rowconfigure(1, weight=1)
-        main.rowconfigure(2, weight=1)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(1, weight=0)
+        main.rowconfigure(2, weight=0)
+        main.rowconfigure(3, weight=0)
         main.rowconfigure(4, weight=0)
+
+        # Set equal heights for the three display rows
+        display_height = 300
+        main.rowconfigure(1, minsize=display_height)
+        main.rowconfigure(2, minsize=display_height)
+        main.rowconfigure(3, minsize=display_height)
 
         top_bar = ttk.Frame(main)
         top_bar.grid(row=0, column=0, sticky="ew", padx=4, pady=2)
@@ -116,6 +133,24 @@ class BeamApp(tk.Tk):
 
         self.freq_panel = FrequencyPanel(main)
         self.freq_panel.grid(row=4, column=0, sticky="ew", padx=4, pady=4)
+
+        # Update scroll region when content changes
+        def _configure_scroll(event):
+            main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+            # Make sure the canvas window is wide enough
+            canvas_width = event.width
+            main_canvas.itemconfig(main_window, width=canvas_width)
+
+        main_canvas.bind("<Configure>", _configure_scroll)
+        main.bind("<Configure>", lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all")))
+
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event):
+            main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        main_canvas.bind_all("<MouseWheel>", _on_mousewheel)  # Windows/MacOS
+        main_canvas.bind_all("<Button-4>", lambda e: main_canvas.yview_scroll(-1, "units"))  # Linux scroll up
+        main_canvas.bind_all("<Button-5>", lambda e: main_canvas.yview_scroll(1, "units"))  # Linux scroll down
 
         self.status_var.set("Ready (press Run)")
 

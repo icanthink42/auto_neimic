@@ -15,7 +15,7 @@ class BeamView(ttk.LabelFrame):
         self.state = state
         self.on_change = on_change
         self.canvas = tk.Canvas(
-            self, width=800, height=220, bg="white", highlightthickness=1, highlightbackground="#ccc"
+            self, width=800, height=300, bg="white", highlightthickness=1, highlightbackground="#ccc"
         )
         self.canvas.pack(fill="both", expand=True)
         self.margin = 40

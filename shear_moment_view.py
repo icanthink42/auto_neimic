@@ -3,9 +3,9 @@ from tkinter import ttk
 from typing import Sequence
 
 
-class ShearMomentView(ttk.Frame):
-    def __init__(self, master: tk.Widget, width: int = 800, height: int = 320):
-        super().__init__(master)
+class ShearMomentView(ttk.LabelFrame):
+    def __init__(self, master: tk.Widget, width: int = 800, height: int = 300):
+        super().__init__(master, text="Shear Force & Bending Moment")
         self._last_x = []
         self._last_shear = []
         self._last_moment = []
@@ -15,10 +15,11 @@ class ShearMomentView(ttk.Frame):
         self.moment_canvas = tk.Canvas(
             self, width=width, height=height // 2, bg="white", highlightthickness=1, highlightbackground="#ccc"
         )
-        ttk.Label(self, text="Shear force").pack(anchor="w")
-        self.shear_canvas.pack(fill="both", expand=True, pady=(0, 4))
-        ttk.Label(self, text="Bending moment").pack(anchor="w")
-        self.moment_canvas.pack(fill="both", expand=True)
+
+        ttk.Label(self, text="Shear force").pack(anchor="w", padx=4, pady=(4, 0))
+        self.shear_canvas.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        ttk.Label(self, text="Bending moment").pack(anchor="w", padx=4)
+        self.moment_canvas.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
         self.shear_canvas.bind("<Configure>", lambda _e: self._redraw())
         self.moment_canvas.bind("<Configure>", lambda _e: self._redraw())
